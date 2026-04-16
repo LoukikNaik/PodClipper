@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# Pipeline artifacts
+outputs/
+.cache/
+*.mp4
+*.mov
+*.wav
+*.ass
+*.srt
+
+# YOLO / Whisper model caches
+*.pt
+~/.cache/whisper/
+~/.cache/torch/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

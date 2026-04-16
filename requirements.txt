@@ -1,0 +1,13 @@
+faster-whisper>=1.1.0
+ultralytics>=8.3.0
+opencv-python>=4.10
+numpy>=1.26
+Pillow>=10.0
+anthropic>=0.42.0
+pyyaml>=6.0
+rich>=13.0
+
+# Post-MVP (multi-speaker diarization):
+# pyannote.audio>=3.1      # gated HF model; requires HF_TOKEN
+# mediapipe>=0.10          # face landmarks for mouth-motion linking
+# torch                    # pulled in by pyannote

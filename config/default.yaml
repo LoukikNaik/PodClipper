@@ -1,0 +1,89 @@
+# Agentic Video Editor — default configuration.
+# Every module reads from here; CLI flags may override individual keys.
+
+paths:
+  output_dir: outputs
+  cache_dir: .cache              # intermediate artifacts (audio, clips, transcripts) — enables resumability
+
+audio:
+  sample_rate: 16000             # Whisper-friendly
+  codec: pcm_s16le               # uncompressed WAV for fastest decode
+  chunk_seconds: 300             # first-pass chunk length (5 min)
+  chunk_overlap_seconds: 10      # overlap for boundary safety
+
+transcribe:
+  language: null                 # null = auto-detect; set "en", "hi", etc. to force
+  first_pass:
+    model: base                  # tiny | base | small | medium | large-v3
+    compute_type: int8           # int8 (CPU), int8_float16 (MPS), float16 (GPU)
+    device: auto                 # auto | cpu | cuda | mps
+    max_workers: 4               # parallel chunk workers (ThreadPool)
+    beam_size: 1                 # lower = faster, higher = more accurate
+  second_pass:
+    model: large-v3              # high-quality per-clip re-transcription
+    compute_type: int8           # use "int8_float16" or "float16" only with CUDA GPU
+    device: auto
+    beam_size: 5                 # accuracy matters more here (subtitles)
+    word_timestamps: true
+
+llm:
+  provider: claude_cli           # claude_cli | anthropic_api
+  model: claude-opus-4-6         # used by anthropic_api; claude_cli picks its default
+  max_tokens: 4096
+  claude_cli:
+    binary: claude               # path to CLI; "claude" uses $PATH
+    extra_args: []
+  anthropic_api:
+    api_key_env: ANTHROPIC_API_KEY
+
+analyze:
+  min_clip_seconds: 15
+  max_clip_seconds: 90
+  target_clips: 8                # hint to the LLM; it may return fewer/more
+  transcript_timestamp_resolution: seconds    # "seconds" → [MM:SS] prefixes
+
+clip_extract:
+  pad_seconds: 2.0               # buffer on each side of LLM-chosen clip
+  video_codec: libx264
+  crf: 18                        # visually lossless-ish for intermediate
+  preset: medium
+
+detect:
+  model: yolov8n.pt              # nano weights; downloaded on first use
+  device: auto
+  confidence: 0.35
+  iou: 0.5
+  sample_every_n_frames: 1       # 1 = every frame; bump for speed
+  person_class_id: 0
+
+crop:
+  target_width: 1080
+  target_height: 1920
+  smoothing_alpha: 0.1           # EMA for x-center within a segment; lower = smoother
+  min_segment_dwell_seconds: 0.8 # merge segments shorter than this
+  debug_overlay: false
+  ffmpeg_encoder: libx264
+  ffmpeg_crf: 20
+  ffmpeg_preset: medium
+
+subtitles:
+  font_name: "Arial"
+  font_size: 72
+  primary_color: "&H00FFFFFF"    # white (BGR in ASS format)
+  highlight_color: "&H0000FFFF"  # yellow accent for current word
+  outline_color: "&H00000000"
+  outline_width: 3
+  shadow: 1
+  margin_v: 360                  # from bottom; positions subs in lower third of 1920px frame
+  max_chars_per_line: 20
+
+diarize:                         # post-MVP
+  enabled: false                 # flip to true once pyannote is installed
+  hf_token_env: HF_TOKEN
+  model: pyannote/speaker-diarization-3.1
+  min_speakers: null
+  max_speakers: null
+
+logging:
+  level: INFO
+  show_progress: true
