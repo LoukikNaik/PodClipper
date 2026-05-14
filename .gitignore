@@ -47,6 +47,9 @@ samples/
 *.webm
 *.wav
 *.mp3
+# Exception: the three demo reels shipped with the landing page are
+# tracked so the GH-Pages-deployed site has working <video> sources.
+!landing/public/videos/*.mp4
 *.m4a
 *.flac
 *.ogg
