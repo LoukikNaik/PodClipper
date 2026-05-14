@@ -21,6 +21,7 @@ class ClaudeCLIProvider:
     def __init__(self, cfg: SimpleNamespace):
         self.binary = getattr(cfg, "binary", "claude")
         self.extra_args = list(getattr(cfg, "extra_args", []) or [])
+        self.timeout = int(getattr(cfg, "timeout_seconds", 900))
         if shutil.which(self.binary) is None:
             raise LLMError(
                 f"claude CLI binary {self.binary!r} not found on PATH. "
@@ -49,10 +50,10 @@ class ClaudeCLIProvider:
                 capture_output=True,
                 text=True,
                 check=True,
-                timeout=300,
+                timeout=self.timeout,
             )
         except subprocess.TimeoutExpired as e:
-            raise LLMError(f"claude CLI timed out after 300s") from e
+            raise LLMError(f"claude CLI timed out after {self.timeout}s") from e
         except subprocess.CalledProcessError as e:
             raise LLMError(
                 f"claude CLI failed (exit {e.returncode}): {e.stderr.strip()[-500:]}"
