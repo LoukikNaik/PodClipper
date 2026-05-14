@@ -71,6 +71,31 @@ def _cluster_persistence(cluster: list[int], total_frames: int) -> float:
     return len(cluster) / total_frames
 
 
+def _longest_contiguous_run(frames: list[int], gap_tolerance: int) -> int:
+    """Return the time-span (in frames) of the longest contiguous run of
+    detections in `frames`, where consecutive entries are considered part of
+    the same run if they're within `gap_tolerance` frames of each other.
+
+    A run's "span" is (last - first + 1), not the count of members. This way
+    a deliberately framed shot of 3.5 s that only has ~70% detection density
+    still gets credit for being on screen 3.5 s. Used to distinguish real
+    shots (long contiguous screen time) from scattered false positives.
+    """
+    if not frames:
+        return 0
+    sorted_frames = sorted(frames)
+    best = 1
+    run_start = sorted_frames[0]
+    prev = sorted_frames[0]
+    for f in sorted_frames[1:]:
+        if f - prev > gap_tolerance:
+            best = max(best, prev - run_start + 1)
+            run_start = f
+        prev = f
+    best = max(best, prev - run_start + 1)
+    return best
+
+
 # ---------- bbox_at callables ----------
 
 def _make_bbox_source(bboxes: list[Optional[BBox]], member_frames: set[int]):
@@ -124,16 +149,41 @@ def _multi_shot_timeline(
             if 0 <= f < total_frames:
                 frame_to_sig[f] = sig_idx
 
-    # Fill gaps by carrying forward the last known significant cluster.
-    # For initial gap (video starts inside a short/insignificant shot), seed
-    # with the first significant value we find.
-    seed = next((c for c in frame_to_sig if c >= 0), 0)
-    last = seed
-    for i in range(total_frames):
-        if frame_to_sig[i] < 0:
-            frame_to_sig[i] = last
-        else:
-            last = frame_to_sig[i]
+    # Fill gaps by assigning each gap frame to whichever significant cluster
+    # is nearer in time. This handles shot cuts correctly: a gap caused by
+    # motion-blurred transition frames gets split — frames near the old shot
+    # stay with the old cluster, frames near the new shot move to the new
+    # one. Pure carry-forward would leave the entire gap with the old shot,
+    # delaying the crop's segment switch past the visual cut.
+    sig_positions = [i for i in range(total_frames) if frame_to_sig[i] >= 0]
+    if sig_positions:
+        # For each frame, find the nearest sig_position via two-pointer sweep.
+        # Build prev_sig (last sig at or before i) and next_sig (first sig at or after i).
+        prev_sig = [-1] * total_frames
+        last = -1
+        for i in range(total_frames):
+            if frame_to_sig[i] >= 0:
+                last = i
+            prev_sig[i] = last
+        next_sig = [-1] * total_frames
+        nxt = -1
+        for i in range(total_frames - 1, -1, -1):
+            if frame_to_sig[i] >= 0:
+                nxt = i
+            next_sig[i] = nxt
+        for i in range(total_frames):
+            if frame_to_sig[i] >= 0:
+                continue
+            p, n = prev_sig[i], next_sig[i]
+            if p < 0:
+                frame_to_sig[i] = frame_to_sig[n]
+            elif n < 0:
+                frame_to_sig[i] = frame_to_sig[p]
+            else:
+                frame_to_sig[i] = frame_to_sig[n] if (n - i) <= (i - p) else frame_to_sig[p]
+    else:
+        for i in range(total_frames):
+            frame_to_sig[i] = 0
 
     # Pre-compute the frame-set lookup each cluster's bbox_at will need.
     cluster_frame_sets = [set(c) for c in significant_clusters]
@@ -217,9 +267,18 @@ def build_speaker_timeline(
     clusters = _cluster_x_centers(per_frame_bboxes)
     log.info(f"Found {len(clusters)} persistent bbox cluster(s)")
 
-    # Drop clusters that are too transient (< 10% of frames) — usually false positives
-    min_cluster_frames = max(1, int(0.1 * total_frames))
-    significant = [c for c in clusters if len(c) >= min_cluster_frames]
+    # Drop transient clusters. A cluster qualifies as "real" if its longest
+    # contiguous on-screen run is at least ~1s — that's a deliberate shot,
+    # not a stray false positive. Counting raw frames (the old 10%-of-total
+    # rule) wrongly dropped legitimate ~3.5s cutaway shots whenever the main
+    # cluster dominated the rest of the clip.
+    min_run_seconds = 1.0
+    min_run_frames = max(1, int(min_run_seconds * fps)) if fps > 0 else 1
+    gap_tolerance = max(2, int(0.25 * fps)) if fps > 0 else 2
+    significant = [
+        c for c in clusters
+        if _longest_contiguous_run(c, gap_tolerance) >= min_run_frames
+    ]
     if not significant:
         # Nothing persistent — treat all detections as "one speaker"
         log.debug("No persistent cluster; using all detections as single group")

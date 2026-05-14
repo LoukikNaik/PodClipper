@@ -184,10 +184,21 @@ def smart_crop_916(
             t = frame_idx / fps
             seg_idx, seg = _segment_for_time(timeline, t)
 
-            # Hard cut on segment change: reset EMA to the new target
+            # Hard cut on segment change: reset EMA AND drop the previous
+            # shot's last_known_x, then seed from the new segment's first
+            # available bbox so transition gaps don't strand the crop at the
+            # old shot's x-center (mic / empty wall artifact).
             if seg_idx != last_segment_idx:
                 smoothed_x = None
                 last_segment_idx = seg_idx
+                last_known_x = None
+                seg_end_frame = int(seg.end * fps) if fps else frame_idx
+                look_limit = min(frame_idx + int(0.5 * fps), seg_end_frame)
+                for look in range(frame_idx, look_limit + 1):
+                    b = seg.bbox_at(look)
+                    if b is not None:
+                        last_known_x = b.x_center
+                        break
 
             bbox = seg.bbox_at(frame_idx)
             if bbox is not None:
