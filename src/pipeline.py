@@ -49,7 +49,7 @@ from .logging_util import get_console
 from .evaluate import evaluate_reel
 from .subtitles import burn_subtitles
 from .timeline import apply_min_dwell, build_speaker_timeline
-from .transcribe import transcribe_first_pass, transcribe_second_pass
+from .transcribe import transcribe_first_pass, transcribe_second_pass_cached
 from .transcribe_cleanup import cleanup_words
 from .types import Clip, VideoMeta
 
@@ -201,8 +201,9 @@ def run_pipeline(
                 per_frame, clip_fps, clip_w, clip_h = detect_humans_per_frame(segment_path, cfg)
 
                 # Run transcription + diarization concurrently (I/O + CPU bound; they don't share state).
+                words_cache = clip_cache / "words.json" if use_cache else None
                 with ThreadPoolExecutor(max_workers=2) as ex:
-                    f_words = ex.submit(transcribe_second_pass, segment_path, cfg)
+                    f_words = ex.submit(transcribe_second_pass_cached, segment_path, words_cache, cfg)
                     f_diar = ex.submit(_maybe_diarize, segment_path, cfg)
                     words = f_words.result()
                     diar_segments = f_diar.result()

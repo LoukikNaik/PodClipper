@@ -16,13 +16,14 @@ in-memory for parallel chunk workers — no per-chunk WAV files on disk.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Iterable
+from typing import Iterable, Optional
 
 import numpy as np
 
@@ -260,6 +261,46 @@ def transcribe_second_pass(
     for seg in segs:
         words.extend(seg.words)
     log.info(f"Second pass on {clip_audio_or_video.name}: {len(words)} words")
+    return words
+
+
+def _words_to_json(words: list[Word]) -> list[dict]:
+    return [{"start": w.start, "end": w.end, "text": w.text, "confidence": w.confidence}
+            for w in words]
+
+
+def _words_from_json(data: list[dict]) -> list[Word]:
+    return [Word(start=float(d["start"]), end=float(d["end"]),
+                 text=str(d["text"]), confidence=float(d.get("confidence", 1.0)))
+            for d in data]
+
+
+def transcribe_second_pass_cached(
+    clip_audio_or_video: Path,
+    cache_path: Optional[Path],
+    cfg: SimpleNamespace,
+) -> list[Word]:
+    """Same as `transcribe_second_pass`, but caches the word list to `cache_path`
+    as JSON. If the cache file exists, load and return it instead of re-running
+    Whisper. Pass `cache_path=None` to bypass caching.
+    """
+    if cache_path is not None and cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text())
+            words = _words_from_json(data)
+            log.info(f"Loaded {len(words)} cached words from {cache_path.name}")
+            return words
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"Failed to load words cache {cache_path} ({e}); re-transcribing")
+
+    words = transcribe_second_pass(clip_audio_or_video, cfg)
+    if cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(_words_to_json(words), ensure_ascii=False, indent=2))
+            log.info(f"Cached {len(words)} words → {cache_path.name}")
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"Failed to write words cache {cache_path}: {e}")
     return words
 
 
