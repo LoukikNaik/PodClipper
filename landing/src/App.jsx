@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-const GH = 'https://github.com/loukiknaik/agentic-video-editor'
+const GH = 'https://github.com/LoukikNaik/PodClipper'
 
 // ── Intersection-based reveal ────────────────────────────────────
 function useReveal(threshold = 0.1) {
@@ -514,7 +514,7 @@ function Footer() {
       </div>
       <a href={GH} className="footer-gh" target="_blank" rel="noopener noreferrer">
         <GithubIcon size={14} />
-        github.com/loukiknaik/agentic-video-editor
+        github.com/LoukikNaik/PodClipper
       </a>
     </footer>
   )
