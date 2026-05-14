@@ -95,7 +95,7 @@ function Hero() {
           Open source · Python · Claude AI
         </div>
         <h1 className="hero-h1">
-          Computer vision plus LLM reasoning.<br />
+          {/* Computer vision plus LLM reasoning.<br /> */}
           Long podcasts. <span className="hero-highlight">Short reels.</span>
         </h1>
         <p className="hero-p">
