@@ -95,13 +95,14 @@ function Hero() {
           Open source · Python · Claude AI
         </div>
         <h1 className="hero-h1">
-          Drop a video.<br />
+          Drop a podcast.<br />
           Get <span className="hero-highlight">viral reels.</span>
         </h1>
         <p className="hero-p">
-          Feed PodClipper a long-form video. It finds your most shareable
-          moments, keeps your subject in frame, adds word-by-word captions,
-          and delivers a polished portrait reel — ready to post.
+          Feed PodClipper a long-form podcast episode. It finds the moments
+          people actually share, keeps your speaker in frame, adds word-by-word
+          captions, and delivers polished portrait reels — ready to post to
+          TikTok, Reels, and Shorts.
         </p>
         <div className="hero-ctas">
           <a href={GH} className="btn-primary" target="_blank" rel="noopener noreferrer">
@@ -119,10 +120,10 @@ function Hero() {
 
 // ── Stats bar ────────────────────────────────────────────────────
 const STATS = [
-  { n: 5,   suffix: '',   label: 'Reels from a single video' },
+  { n: 5,   suffix: '',   label: 'Reels from a single episode' },
   { n: 0,   suffix: '',   label: 'Manual editing steps required' },
-  { n: 100, suffix: '%',  label: 'Private — nothing leaves your machine' },
-  { n: 1,   suffix: '',   label: 'Command to run the whole pipeline' },
+  { n: 100, suffix: '%',  label: 'Private — your audio never leaves your machine' },
+  { n: 1,   suffix: '',   label: 'Command to clip an entire episode' },
 ]
 
 function StatsBar() {
@@ -214,9 +215,9 @@ function Demo() {
       <div className="container">
         <div ref={hRef} className={`demo-head${hVisible ? ' visible' : ''}`}>
           <p className="eyebrow">See it in action</p>
-          <h2 className="h2">One video in.<br /><em>Three reels out.</em></h2>
+          <h2 className="h2">One episode in.<br /><em>Three reels out.</em></h2>
           <p className="lead">
-            A full-length lecture fed into PodClipper. Every clip selection,
+            A full podcast episode fed into PodClipper. Every clip selection,
             crop decision, caption, and title came from the AI — no human
             touched the timeline.
           </p>
@@ -226,12 +227,12 @@ function Demo() {
         <div ref={yRef} className={`yt-card${yVisible ? ' visible' : ''}`}>
           <div className="yt-label">
             <span className="yt-dot" />
-            Source video · youtube.com/watch?v=RiHi4solYHE
+            Source episode · youtube.com/watch?v=RiHi4solYHE
           </div>
           <div className="yt-frame">
             <iframe
               src="https://www.youtube.com/embed/RiHi4solYHE"
-              title="Source YouTube video"
+              title="Source podcast episode"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               allowFullScreen
             />
@@ -242,7 +243,7 @@ function Demo() {
         <div className="connector" aria-hidden>
           <div className="connector-track">
             <div className="connector-line" />
-            <span className="connector-pill">PodClipper processed this</span>
+            <span className="connector-pill">PodClipper clipped this episode</span>
             <div className="connector-line" />
           </div>
           <span className="connector-arrow">↓</span>
@@ -396,7 +397,7 @@ const STEPS = [
     n: '01',
     viz: TranscribeViz,
     title: 'Transcribe',
-    body: 'Your video is transcribed in parallel — chunked and processed concurrently so even a two-hour podcast finishes in the background while you keep working. Every word gets a precise timestamp the AI can reason over.',
+    body: 'Your episode is transcribed in parallel — chunked and processed concurrently so even a two-hour podcast finishes in the background while you keep working. Every word gets a precise timestamp the AI can reason over.',
     tag: 'faster-whisper',
   },
   {
@@ -410,7 +411,7 @@ const STEPS = [
     n: '03',
     viz: EditViz,
     title: 'Edit',
-    body: 'Your subject is detected and tracked in every frame — the crop follows them smoothly, even through movement and cuts. Word-by-word captions, a fading title card, and a clean audio fade round out each reel, ready to upload.',
+    body: 'Your speaker is detected and tracked in every frame — the crop follows whoever is talking, even through camera cuts between host and guest. Word-by-word captions, a fading title card, and a clean audio fade round out each reel, ready to upload.',
     tag: 'YOLOv8 + FFmpeg',
   },
 ]
@@ -422,7 +423,7 @@ function HowItWorks() {
         <div className="how-head">
           <p className="eyebrow">How it works</p>
           <h2 className="h2">Three stages.<br /><em>Fully automated.</em></h2>
-          <p className="lead">Point PodClipper at any video file and walk away. It handles the rest.</p>
+          <p className="lead">Point PodClipper at any podcast episode and walk away. Transcription, clip selection, cropping, captions, and export — all handled.</p>
         </div>
         <div className="steps">
           {STEPS.map((s, i) => <StepCard key={s.n} step={s} delay={i * 80} />)}
@@ -452,9 +453,9 @@ function StepCard({ step, delay }) {
 
 // ── Stack ─────────────────────────────────────────────────────────
 const STACK = [
-  { label: 'Transcription', title: 'faster-whisper (CTranslate2)', desc: 'One model, multiple threads — transcribes a full hour in the background with no per-worker memory overhead. You get every word, timestamped precisely.' },
-  { label: 'AI Analysis',   title: 'Anthropic Claude',             desc: "Doesn't just find interesting moments — scores them. Every clip is evaluated for hook strength, narrative arc, and whether it can stand alone out of context." },
-  { label: 'Subject Tracking', title: 'YOLOv8 + IoU tracking',    desc: 'Knows who to follow even when the camera cuts. Anchor-based detection keeps the crop locked on your speaker through movement and edits.' },
+  { label: 'Transcription', title: 'faster-whisper (CTranslate2)', desc: 'One model, multiple threads — transcribes a full hour of podcast audio in the background with no per-worker memory overhead. You get every word, timestamped precisely.' },
+  { label: 'AI Analysis',   title: 'Anthropic Claude',             desc: "Doesn't just find interesting moments — scores them. Every clip is evaluated for hook strength, narrative arc, and whether it stands alone for someone who's never heard the episode." },
+  { label: 'Speaker Tracking', title: 'YOLOv8 + IoU tracking',     desc: 'Knows which host or guest to follow even when the camera cuts between them. Anchor-based detection keeps the crop locked on whoever is speaking, frame after frame.' },
   { label: 'Export',        title: 'FFmpeg + OpenCV + PIL',        desc: 'The entire post-production chain — crop, captions, fade — happens in a single pass. No intermediate files bloating your drive, no quality loss.' },
 ]
 
@@ -492,8 +493,8 @@ function CTABanner() {
   return (
     <section className="cta-section" ref={ref}>
       <div className={`cta-inner${visible ? ' visible' : ''}`}>
-        <h2 className="cta-h">Your backlog is a goldmine.</h2>
-        <p className="cta-p">Every long video you've ever recorded has shareable moments in it. PodClipper finds them for you — free, open source, and runs entirely on your machine.</p>
+        <h2 className="cta-h">Your episode archive is a goldmine.</h2>
+        <p className="cta-p">Every podcast you've ever recorded has shareable moments in it. PodClipper finds them for you — free, open source, and runs entirely on your machine.</p>
         <a href={GH} className="btn-cta" target="_blank" rel="noopener noreferrer">
           <GithubIcon size={16} />
           View on GitHub
