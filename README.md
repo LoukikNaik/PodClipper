@@ -6,19 +6,24 @@ Turn a long-form podcast, talk or interview into vertical 9:16 reels — locally
 
 ## Demo reels
 
-Three reels generated end-to-end from a single ~60-minute podcast episode. Click play — they have audio.
+Three reels generated end-to-end from a single ~60-minute podcast episode.
 
-### 1. "Why Ravan Could Never Break Sita"
-
-https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_why-ravan-could-never-break-sita.mp4
-
-### 2. "She Reached for Death, Found Hope"
-
-https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_she-reached-for-death-found-hope.mp4
-
-### 3. "How Hanuman Knew It Was Sita"
-
-https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_03_how-hanuman-knew-it-was-sita.mp4
+<table>
+  <tr>
+    <td align="center">
+      <video src="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_why-ravan-could-never-break-sita.mp4" controls width="260"></video>
+      <br/><em>"Why Ravan Could Never Break Sita"</em>
+    </td>
+    <td align="center">
+      <video src="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_she-reached-for-death-found-hope.mp4" controls width="260"></video>
+      <br/><em>"She Reached for Death, Found Hope"</em>
+    </td>
+    <td align="center">
+      <video src="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_03_how-hanuman-knew-it-was-sita.mp4" controls width="260"></video>
+      <br/><em>"How Hanuman Knew It Was Sita"</em>
+    </td>
+  </tr>
+</table>
 
 Originals also playable at the [live demo site](https://podclipper.loukik.dev).
 
