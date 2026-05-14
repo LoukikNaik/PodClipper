@@ -95,14 +95,15 @@ function Hero() {
           Open source · Python · Claude AI
         </div>
         <h1 className="hero-h1">
-          Drop a podcast.<br />
-          Get <span className="hero-highlight">viral reels.</span>
+          Computer vision plus LLM reasoning.<br />
+          Long podcasts. <span className="hero-highlight">Short reels.</span>
         </h1>
         <p className="hero-p">
-          Feed PodClipper a long-form podcast episode. It finds the moments
-          people actually share, keeps your speaker in frame, adds word-by-word
-          captions, and delivers polished portrait reels — ready to post to
-          TikTok, Reels, and Shorts.
+          We merged computer vision and LLM reasoning to convert long
+          podcasts into digestible short, interesting reels. PodClipper
+          picks the moments worth sharing, follows the active speaker
+          through camera cuts, and burns in karaoke captions. Ready to
+          post to TikTok, Reels, and Shorts.
         </p>
         <div className="hero-ctas">
           <a href={GH} className="btn-primary" target="_blank" rel="noopener noreferrer">
@@ -122,7 +123,7 @@ function Hero() {
 const STATS = [
   { n: 5,   suffix: '',   label: 'Reels from a single episode' },
   { n: 0,   suffix: '',   label: 'Manual editing steps required' },
-  { n: 100, suffix: '%',  label: 'Private — your audio never leaves your machine' },
+  { n: 100, suffix: '%',  label: 'Local. Audio never leaves your machine' },
   { n: 1,   suffix: '',   label: 'Command to clip an entire episode' },
 ]
 
@@ -145,21 +146,21 @@ function StatsBar() {
 const REELS = [
   {
     src: 'videos/reel_01_why-ravan-could-never-break-sita.mp4',
-    score: 'AI score 0.89 · Publish',
+    score: 'AI score 4.5 / 5 · Publish',
     title: 'Why Ravan Could Never Break Sita',
-    note: "Sita's blade-of-grass defiance — the AI found this moment at 6 min 54 sec and rated it ready to publish",
+    note: "Sita's blade-of-grass defiance. The AI surfaced this moment at 6 min 54 sec and rated it ready to publish.",
   },
   {
     src: 'videos/reel_02_she-reached-for-death-found-hope.mp4',
-    score: 'AI score 0.83 · Publish',
+    score: 'AI score 4.2 / 5 · Publish',
     title: 'She Reached for Death, Found Hope',
-    note: 'A full emotional arc with a twist ending — 47 seconds, surfaced from the 12-minute mark',
+    note: 'A full emotional arc with a twist ending. 47 seconds, surfaced from the 12-minute mark.',
   },
   {
     src: 'videos/reel_03_how-hanuman-knew-it-was-sita.mp4',
-    score: 'AI score 0.80 · Review',
+    score: 'AI score 3.8 / 5 · Review',
     title: 'How Hanuman Knew It Was Sita',
-    note: 'Detective-logic payoff at the 3 min 28 sec mark — flagged for review with feedback on adding context',
+    note: 'Detective-logic payoff at the 3 min 28 sec mark. Flagged for review with feedback on adding context.',
   },
 ]
 
@@ -187,7 +188,7 @@ function Phone({ src, score, title, note, delay = 0 }) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onClick={toggle}
-        aria-label={`${title} — ${muted ? 'unmute' : 'mute'}`}
+        aria-label={`${title}: ${muted ? 'unmute' : 'mute'}`}
       >
         <span className="phone-notch" aria-hidden />
         <div className="phone-screen">
@@ -218,7 +219,7 @@ function Demo() {
           <h2 className="h2">One episode in.<br /><em>Three reels out.</em></h2>
           <p className="lead">
             A full podcast episode fed into PodClipper. Every clip selection,
-            crop decision, caption, and title came from the AI — no human
+            crop decision, caption, and title came from the AI. No human
             touched the timeline.
           </p>
         </div>
@@ -335,11 +336,11 @@ function EditViz() {
 
         {/* Head */}
         <circle cx="140" cy="52" r="22" fill="#3a5068"/>
-        {/* Face highlight — adds depth */}
+        {/* Face highlight, adds depth */}
         <ellipse cx="140" cy="49" rx="12" ry="14" fill="#4d6880" opacity="0.6"/>
         {/* Neck */}
         <rect x="133" y="72" width="14" height="10" rx="3" fill="#3a5068"/>
-        {/* Shoulders + torso — the classic bust icon shape */}
+        {/* Shoulders + torso, classic bust icon shape */}
         <path
           d="M100 168 C100 122 120 106 140 106 C160 106 180 122 180 168 Z"
           fill="#3a5068"
@@ -350,7 +351,7 @@ function EditViz() {
           fill="none" stroke="#4d6880" strokeWidth="1.5" opacity="0.5"
         />
 
-        {/* ── Detection bounding box — draws itself ── */}
+        {/* Detection bounding box, draws itself */}
         <rect
           className="viz-bbox"
           x="92" y="22" width="96" height="144"
@@ -397,22 +398,22 @@ const STEPS = [
     n: '01',
     viz: TranscribeViz,
     title: 'Transcribe',
-    body: 'Your episode is transcribed in parallel — chunked and processed concurrently so even a two-hour podcast finishes in the background while you keep working. Every word gets a precise timestamp the AI can reason over.',
+    body: 'Your episode is transcribed in parallel. Audio chunks process concurrently so even a two-hour podcast finishes in the background while you keep working. Every word gets a precise timestamp the AI can reason over.',
     tag: 'faster-whisper',
   },
   {
     n: '02',
     viz: AnalyzeViz,
     title: 'Analyze',
-    body: "Claude reads your entire transcript and finds moments that are genuinely shareable: a strong opening hook, a clear arc, and a satisfying close. It writes a scroll-stopping title for each clip — concise, curiosity-driven, and grounded in what was actually said.",
+    body: "Claude reads your entire transcript and finds moments that are genuinely shareable: a strong opening hook, a clear arc, and a satisfying close. It writes a scroll-stopping title for each clip, concise and curiosity-driven, grounded in what was actually said.",
     tag: 'Claude AI',
   },
   {
     n: '03',
     viz: EditViz,
     title: 'Edit',
-    body: 'Your speaker is detected and tracked in every frame — the crop follows whoever is talking, even through camera cuts between host and guest. Word-by-word captions, a fading title card, and a clean audio fade round out each reel, ready to upload.',
-    tag: 'YOLOv8 + FFmpeg',
+    body: 'Your speaker is detected and tracked in every frame. The crop follows whoever is talking, even through camera cuts between host and guest. Word-by-word captions, a fading title card, and a clean audio fade round out each reel, ready to upload.',
+    tag: 'YOLOv8 + MediaPipe + FFmpeg',
   },
 ]
 
@@ -423,7 +424,7 @@ function HowItWorks() {
         <div className="how-head">
           <p className="eyebrow">How it works</p>
           <h2 className="h2">Three stages.<br /><em>Fully automated.</em></h2>
-          <p className="lead">Point PodClipper at any podcast episode and walk away. Transcription, clip selection, cropping, captions, and export — all handled.</p>
+          <p className="lead">Point PodClipper at any podcast episode and walk away. Transcription, clip selection, cropping, captions, and export, all handled.</p>
         </div>
         <div className="steps">
           {STEPS.map((s, i) => <StepCard key={s.n} step={s} delay={i * 80} />)}
@@ -453,10 +454,10 @@ function StepCard({ step, delay }) {
 
 // ── Stack ─────────────────────────────────────────────────────────
 const STACK = [
-  { label: 'Transcription', title: 'faster-whisper (CTranslate2)', desc: 'One model, multiple threads — transcribes a full hour of podcast audio in the background with no per-worker memory overhead. You get every word, timestamped precisely.' },
-  { label: 'AI Analysis',   title: 'Anthropic Claude',             desc: "Doesn't just find interesting moments — scores them. Every clip is evaluated for hook strength, narrative arc, and whether it stands alone for someone who's never heard the episode." },
-  { label: 'Speaker Tracking', title: 'YOLOv8 + IoU tracking',     desc: 'Knows which host or guest to follow even when the camera cuts between them. Anchor-based detection keeps the crop locked on whoever is speaking, frame after frame.' },
-  { label: 'Export',        title: 'FFmpeg + OpenCV + PIL',        desc: 'The entire post-production chain — crop, captions, fade — happens in a single pass. No intermediate files bloating your drive, no quality loss.' },
+  { label: 'Transcription', title: 'faster-whisper (CTranslate2)', desc: 'One model, multiple threads. A full hour of podcast audio transcribes in the background with no per-worker memory overhead. Every word lands with a precise timestamp.' },
+  { label: 'AI Analysis',   title: 'Anthropic Claude',             desc: "Claude reads the full transcript and selects clips with a strong hook, a clear arc, and a satisfying close, then writes a scroll-stopping title for each. After rendering, a second LLM pass scores every reel on hook, arc, payoff, and standalone clarity, with a publish, review, or skip verdict." },
+  { label: 'Speaker Tracking', title: 'YOLOv8 + MediaPipe + pyannote', desc: 'YOLOv8 finds people, MediaPipe attributes each face to the right person (so back-of-head detections never win), and pyannote diarization links each speaker to their on-screen position via mouth-motion variance. The crop follows the active speaker even through hard camera cuts.' },
+  { label: 'Export',        title: 'FFmpeg + OpenCV + PIL',        desc: 'OpenCV computes the 9:16 crop window with EMA smoothing and pipes raw frames to FFmpeg. PIL burns the karaoke word highlights and the fading title overlay. Cached intermediates make re-runs near-instant when you tune crop or subtitle settings.' },
 ]
 
 function Stack() {
@@ -494,7 +495,7 @@ function CTABanner() {
     <section className="cta-section" ref={ref}>
       <div className={`cta-inner${visible ? ' visible' : ''}`}>
         <h2 className="cta-h">Your episode archive is a goldmine.</h2>
-        <p className="cta-p">Every podcast you've ever recorded has shareable moments in it. PodClipper finds them for you — free, open source, and runs entirely on your machine.</p>
+        <p className="cta-p">Every podcast you've ever recorded has shareable moments in it. PodClipper finds them for you. Free, open source, and runs entirely on your machine.</p>
         <a href={GH} className="btn-cta" target="_blank" rel="noopener noreferrer">
           <GithubIcon size={16} />
           View on GitHub
