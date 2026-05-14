@@ -51,6 +51,14 @@ class Transcript:
 # ---------- Stage 4: Analyze ----------
 
 @dataclass
+class DiarSegment:
+    """One speaker-active window from audio diarization (pyannote.audio)."""
+    start: float                # clip-relative seconds
+    end: float
+    speaker_id: str             # pyannote label, e.g. "SPEAKER_00"
+
+
+@dataclass
 class Clip:
     start: float            # video-relative seconds
     end: float

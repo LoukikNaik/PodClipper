@@ -108,6 +108,8 @@ def _parse_ass_color(c: str) -> tuple[int, int, int, int]:
 # ---------- Font resolution ----------
 
 _FONT_CANDIDATES = [
+    # Prefer bold/heavy condensed — looks like professional reel overlays
+    "/System/Library/Fonts/Supplemental/Impact.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
@@ -198,6 +200,134 @@ def _active_line(lines: list[SubLine], t: float) -> Optional[SubLine]:
     return None
 
 
+# ---------- Title overlay ----------
+
+def _wrap_title(title: str, max_chars: int) -> list[str]:
+    """Greedy word-wrap the title into lines no longer than `max_chars`."""
+    words = title.split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        candidate = f"{cur} {w}".strip()
+        if len(candidate) <= max_chars or not cur:
+            cur = candidate
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _title_alpha(t: float, duration: float, fade: float) -> float:
+    """Return 0.0-1.0 opacity for the title overlay at time t."""
+    if t < 0 or t >= duration:
+        return 0.0
+    fade_start = max(0.0, duration - fade)
+    if t <= fade_start:
+        return 1.0
+    # Linear fade from fade_start to duration
+    return max(0.0, 1.0 - (t - fade_start) / fade)
+
+
+def _apply_alpha(rgba: tuple[int, int, int, int], factor: float) -> tuple[int, int, int, int]:
+    r, g, b, a = rgba
+    return (r, g, b, int(round(a * factor)))
+
+
+def _render_title_onto_frame(
+    frame: np.ndarray,
+    title_lines: list[str],
+    alpha: float,
+    font: ImageFont.ImageFont,
+    cfg: SimpleNamespace,
+    frame_size: tuple[int, int],
+) -> np.ndarray:
+    """Composite a (possibly multi-line) title at the top of the frame.
+
+    Supports two backdrop modes:
+      - gradient (default): dark-to-transparent sweep across the top 35% of
+        the frame, like professional reel edits.
+      - pill: rounded rectangle behind the text (legacy).
+    """
+    tcfg = cfg.subtitles.title_overlay
+    frame_w, frame_h = frame_size
+
+    pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    overlay = Image.new("RGBA", pil.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Measure each line
+    line_heights: list[int] = []
+    line_widths: list[int] = []
+    for line in title_lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_widths.append(bbox[2] - bbox[0])
+        line_heights.append(bbox[3] - bbox[1])
+    if not title_lines:
+        return frame
+
+    total_text_h = sum(line_heights) + int(tcfg.line_spacing) * max(0, len(title_lines) - 1)
+    max_line_w = max(line_widths)
+
+    y0 = int(tcfg.y_offset)
+    x_center = frame_w // 2
+
+    # --- Gradient backdrop (top-of-frame dark sweep) ---
+    if bool(getattr(tcfg, "gradient_enabled", False)):
+        grad_opacity = float(getattr(tcfg, "gradient_opacity", 0.55)) * alpha
+        # Gradient covers top ~35% of frame, fading from `grad_opacity` black to transparent
+        grad_h = int(frame_h * 0.35)
+        # Build gradient alpha channel efficiently via numpy
+        alpha_col = np.linspace(grad_opacity * 255, 0, grad_h, dtype=np.uint8)
+        grad_arr = np.zeros((grad_h, frame_w, 4), dtype=np.uint8)
+        grad_arr[:, :, 3] = alpha_col[:, np.newaxis]  # broadcast alpha across width
+        grad = Image.fromarray(grad_arr, "RGBA")
+        overlay.paste(grad, (0, 0))
+
+    # --- Pill backdrop (legacy) ---
+    elif bool(getattr(tcfg, "pill_enabled", False)):
+        pad_x = int(tcfg.pill_padding_x)
+        pad_y = int(tcfg.pill_padding_y)
+        radius = int(tcfg.pill_corner_radius)
+        pill_w = max_line_w + 2 * pad_x
+        pill_h = total_text_h + 2 * pad_y
+        pill_x = x_center - pill_w // 2
+        pill_y = y0 - pad_y
+        pill_color = _apply_alpha(_parse_ass_color(tcfg.pill_color), alpha)
+        draw.rounded_rectangle(
+            [pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
+            radius=radius, fill=pill_color,
+        )
+
+    # --- Text rendering (bold outline + fill) ---
+    text_rgba = _apply_alpha(_parse_ass_color(tcfg.color), alpha)
+    outline_rgba = _apply_alpha(_parse_ass_color(tcfg.outline_color), alpha)
+    outline_w = int(tcfg.outline_width)
+
+    y = y0
+    for line, lw, lh in zip(title_lines, line_widths, line_heights):
+        x = x_center - lw // 2
+        # Thick outline via stroke_width (if Pillow supports it; fallback to manual)
+        try:
+            draw.text(
+                (x, y), line, font=font, fill=text_rgba,
+                stroke_width=outline_w, stroke_fill=outline_rgba,
+            )
+        except TypeError:
+            # Older Pillow without stroke_width — manual offset
+            for dx in range(-outline_w, outline_w + 1):
+                for dy in range(-outline_w, outline_w + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    draw.text((x + dx, y + dy), line, font=font, fill=outline_rgba)
+            draw.text((x, y), line, font=font, fill=text_rgba)
+        y += lh + int(tcfg.line_spacing)
+
+    merged = Image.alpha_composite(pil, overlay).convert("RGB")
+    return cv2.cvtColor(np.array(merged), cv2.COLOR_RGB2BGR)
+
+
 # ---------- ffmpeg encoder pipe (reused from crop) ----------
 
 def _open_ffmpeg_pipe(
@@ -227,13 +357,34 @@ def _open_ffmpeg_pipe(
     )
 
 
-def _mux_audio(source_video: Path, video_only: Path, final_out: Path) -> None:
+def _mux_audio(
+    source_video: Path,
+    video_only: Path,
+    final_out: Path,
+    audio_fade_out: float = 0.0,
+    video_duration: float = 0.0,
+) -> None:
+    """Mux source-video audio onto the rendered video. Optionally fade audio
+    out over the last `audio_fade_out` seconds (requires `video_duration` so
+    we know where the fade should start)."""
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video_only),
         "-i", str(source_video),
         "-c:v", "copy",
-        "-c:a", "aac",
+    ]
+    if audio_fade_out > 0 and video_duration > audio_fade_out:
+        # Re-encode audio with afade filter. The fade starts so it ends at
+        # `video_duration`. Using duration from the rendered video, not
+        # source, since they may differ slightly.
+        fade_start = max(0.0, video_duration - audio_fade_out)
+        cmd += [
+            "-c:a", "aac",
+            "-af", f"afade=t=out:st={fade_start:.3f}:d={audio_fade_out:.3f}",
+        ]
+    else:
+        cmd += ["-c:a", "aac"]
+    cmd += [
         "-map", "0:v:0",
         "-map", "1:a:0?",
         "-shortest",
@@ -252,10 +403,14 @@ def burn_subtitles(
     words: list[Word],
     out_path: Path,
     cfg: SimpleNamespace,
+    title: str = "",
 ) -> Path:
-    """Render karaoke subtitles onto `video_path` and write to `out_path`.
+    """Render karaoke subtitles + optional fading title overlay onto `video_path`.
 
-    Word timestamps are clip-relative (seconds from video start).
+    Word timestamps are clip-relative (seconds from video start). If `title`
+    is non-empty and cfg.subtitles.title_overlay.enabled is true, an overlay
+    with the title is drawn at the top of the frame and fades out after
+    `title_overlay.duration_seconds`.
     """
     video_path = Path(video_path)
     out_path = Path(out_path)
@@ -265,7 +420,7 @@ def burn_subtitles(
         raise SubtitleError("empty word list — nothing to render")
 
     lines = generate_subtitle_lines(words, cfg)
-    log.info(f"Subtitles: {len(words)} words → {len(lines)} lines")
+    log.info(f"Subtitles: {len(words)} words → {len(lines)} lines" + (f" + title={title!r}" if title else ""))
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -274,6 +429,13 @@ def burn_subtitles(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    fade_out_seconds = float(getattr(cfg.subtitles, "fade_out_seconds", 0.0))
+    fade_out_start_frame = (
+        max(0, total_frames - int(round(fade_out_seconds * fps)))
+        if (fade_out_seconds > 0 and total_frames > 0)
+        else None
+    )
 
     font = _load_font(int(cfg.subtitles.font_size), cfg.subtitles.font_name)
     primary = _parse_ass_color(cfg.subtitles.primary_color)
@@ -281,6 +443,17 @@ def burn_subtitles(
     outline = _parse_ass_color(cfg.subtitles.outline_color)
     outline_w = int(cfg.subtitles.outline_width)
     margin_v = int(cfg.subtitles.margin_v)
+
+    # Title overlay setup (only when enabled and a title was given)
+    tcfg = cfg.subtitles.title_overlay
+    show_title = bool(title) and bool(getattr(tcfg, "enabled", False))
+    title_lines: list[str] = []
+    title_font: Optional[ImageFont.ImageFont] = None
+    title_duration = float(getattr(tcfg, "duration_seconds", 0.0))
+    title_fade = float(getattr(tcfg, "fade_seconds", 0.0))
+    if show_title:
+        title_lines = _wrap_title(title, int(tcfg.max_chars_per_line))
+        title_font = _load_font(int(tcfg.font_size), cfg.subtitles.font_name)
 
     tmp_video = Path(tempfile.mkstemp(prefix="ave_sub_", suffix=".mp4")[1])
     encoder = _open_ffmpeg_pipe(tmp_video, width, height, fps, cfg)
@@ -292,12 +465,31 @@ def burn_subtitles(
             if not ok:
                 break
             t = frame_idx / fps
+
+            # Title overlay first (so subs draw over pill if they ever overlap)
+            if show_title:
+                alpha = _title_alpha(t, title_duration, title_fade)
+                if alpha > 0.0 and title_font is not None:
+                    frame = _render_title_onto_frame(
+                        frame, title_lines, alpha, title_font, cfg, (width, height),
+                    )
+
             line = _active_line(lines, t)
             if line is not None:
                 frame = _render_line_onto_frame(
                     frame, line, t, font,
                     primary, highlight, outline, outline_w, margin_v,
                 )
+
+            # Video fade-to-black for the trailing window
+            if fade_out_start_frame is not None and frame_idx >= fade_out_start_frame:
+                # Linear ramp from 1.0 down to 0.0 across the fade window
+                progress = (frame_idx - fade_out_start_frame) / max(
+                    1, total_frames - fade_out_start_frame - 1
+                )
+                alpha = max(0.0, 1.0 - progress)
+                frame = (frame.astype(np.float32) * alpha).astype(np.uint8)
+
             try:
                 encoder.stdin.write(frame.tobytes())
             except BrokenPipeError as e:
@@ -313,9 +505,18 @@ def burn_subtitles(
         stderr = encoder.stderr.read().decode("utf-8", errors="replace")[-500:]
         raise SubtitleError(f"ffmpeg encoder exited with {ret}: {stderr}")
 
-    log.info(f"Subtitled {frame_idx} frames → muxing audio...")
+    rendered_duration = frame_idx / fps if fps > 0 else 0.0
+    log.info(
+        f"Subtitled {frame_idx} frames → muxing audio"
+        + (f" (fade-out {fade_out_seconds:.2f}s)" if fade_out_seconds > 0 else "")
+        + "..."
+    )
     try:
-        _mux_audio(video_path, tmp_video, out_path)
+        _mux_audio(
+            video_path, tmp_video, out_path,
+            audio_fade_out=fade_out_seconds,
+            video_duration=rendered_duration,
+        )
     finally:
         tmp_video.unlink(missing_ok=True)
 

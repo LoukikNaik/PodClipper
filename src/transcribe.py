@@ -269,15 +269,20 @@ def transcript_to_timestamped_text(
     transcript: Transcript,
     resolution: str = "seconds",
 ) -> str:
-    """Compact [MM:SS] text format for LLM consumption."""
+    """Compact [start-end] text format for LLM consumption.
+
+    Including the end timestamp is important: each line represents one
+    speech segment bounded by natural pauses, so the LLM can use segment
+    ends as candidate clip boundaries and avoid cutting mid-sentence.
+    """
+    def _fmt(t: float) -> str:
+        if resolution == "seconds":
+            return f"{int(t // 60):02d}:{int(t % 60):02d}"
+        return f"{t:.2f}"
+
     lines: list[str] = []
     for seg in transcript.segments:
         if not seg.text.strip():
             continue
-        t = seg.start
-        if resolution == "seconds":
-            stamp = f"{int(t // 60):02d}:{int(t % 60):02d}"
-        else:
-            stamp = f"{t:.2f}"
-        lines.append(f"[{stamp}] {seg.text.strip()}")
+        lines.append(f"[{_fmt(seg.start)}-{_fmt(seg.end)}] {seg.text.strip()}")
     return "\n".join(lines)

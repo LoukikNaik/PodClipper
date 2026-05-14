@@ -1,26 +1,109 @@
-# Python
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
+*$py.class
+*.egg
 *.egg-info/
+.eggs/
+build/
+dist/
+.Python
+pip-wheel-metadata/
+
+# Virtual environments
 .venv/
 venv/
+env/
 .python-version
 
-# Pipeline artifacts
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.tox/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ---------- Pipeline artifacts ----------
 outputs/
 .cache/
+samples/
+
+# Media / generated assets
 *.mp4
 *.mov
+*.mkv
+*.avi
+*.webm
 *.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
 *.ass
 *.srt
+*.vtt
 
-# YOLO / Whisper model caches
+# ---------- Model weights / large binaries ----------
 *.pt
-~/.cache/whisper/
-~/.cache/torch/
+*.pth
+*.onnx
+*.tflite
+*.task
+*.safetensors
+*.gguf
+*.ckpt
 
-# IDE
+# ---------- Node / Vite (landing/) ----------
+node_modules/
+.vite/
+.parcel-cache/
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.output/
+.cache-loader/
+landing/dist/
+landing/build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- IDE / OS ----------
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 .DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------- Secrets / local environment ----------
+.env
+.env.*
+!.env.example
+secrets.json
+*.pem
+*.key
+
+# ---------- Misc ----------
+*.tmp
+*.bak
+*.orig

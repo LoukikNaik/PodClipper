@@ -7,7 +7,8 @@ anthropic>=0.42.0
 pyyaml>=6.0
 rich>=13.0
 
-# Post-MVP (multi-speaker diarization):
-# pyannote.audio>=3.1      # gated HF model; requires HF_TOKEN
-# mediapipe>=0.10          # face landmarks for mouth-motion linking
-# torch                    # pulled in by pyannote
+# Multi-speaker diarization (single-camera interviews)
+pyannote.audio>=3.1        # requires HF_TOKEN — accept terms at
+                           # https://huggingface.co/pyannote/speaker-diarization-3.1
+mediapipe>=0.10            # face landmarks for mouth-motion speaker linking
+torch>=2.0                 # pulled in by pyannote

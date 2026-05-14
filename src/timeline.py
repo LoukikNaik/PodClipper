@@ -96,6 +96,69 @@ def _make_any_bbox_source(bboxes: list[Optional[BBox]]):
     return bbox_at
 
 
+def _multi_shot_timeline(
+    significant_clusters: list[list[int]],
+    per_frame_bboxes: list[Optional[BBox]],
+    clip_duration: float,
+    fps: float,
+) -> "Timeline":
+    """Build a timeline that follows the active cluster per time window.
+
+    When a source has multiple camera angles (common in podcast edits),
+    clusters represent SHOTS. Each cluster has one or more contiguous time
+    windows where it was active. We emit one timeline segment per window,
+    targeting whichever cluster's bbox is active at that time. The editor
+    already cut cameras at these frame boundaries — we just follow them.
+
+    Frames in insignificant clusters or with no detection carry forward the
+    last-known significant cluster so we never emit gap segments.
+    """
+    total_frames = len(per_frame_bboxes)
+    if total_frames == 0:
+        return []
+
+    # frame_idx → which significant cluster (as index into `significant_clusters`)
+    frame_to_sig = [-1] * total_frames
+    for sig_idx, frames in enumerate(significant_clusters):
+        for f in frames:
+            if 0 <= f < total_frames:
+                frame_to_sig[f] = sig_idx
+
+    # Fill gaps by carrying forward the last known significant cluster.
+    # For initial gap (video starts inside a short/insignificant shot), seed
+    # with the first significant value we find.
+    seed = next((c for c in frame_to_sig if c >= 0), 0)
+    last = seed
+    for i in range(total_frames):
+        if frame_to_sig[i] < 0:
+            frame_to_sig[i] = last
+        else:
+            last = frame_to_sig[i]
+
+    # Pre-compute the frame-set lookup each cluster's bbox_at will need.
+    cluster_frame_sets = [set(c) for c in significant_clusters]
+
+    # Collapse contiguous runs into timeline segments.
+    segments: list[TimelineSegment] = []
+    start_f = 0
+    cur = frame_to_sig[0]
+    for i in range(1, total_frames + 1):
+        if i == total_frames or frame_to_sig[i] != cur:
+            start_t = start_f / fps
+            end_t = clip_duration if i == total_frames else i / fps
+            segments.append(TimelineSegment(
+                start=start_t,
+                end=end_t,
+                label=f"SHOT_{cur}",
+                bbox_at=_make_bbox_source(per_frame_bboxes, cluster_frame_sets[cur]),
+            ))
+            if i < total_frames:
+                start_f = i
+                cur = frame_to_sig[i]
+
+    return segments
+
+
 def _make_center_source(center_x: float, center_y: float, w: float, h: float):
     """Fallback: a synthetic 'bbox' anchored at frame center (used when no
     persons are ever detected)."""
@@ -120,6 +183,7 @@ def build_speaker_timeline(
     source_height: int,
     diar_segments: Optional[list] = None,
     cfg: SimpleNamespace | None = None,
+    video_path: "Optional[object]" = None,
 ) -> Timeline:
     """Turn per-frame YOLO output (+ optional diarization) into a Timeline.
 
@@ -166,20 +230,33 @@ def build_speaker_timeline(
             bbox_at=_make_any_bbox_source(per_frame_bboxes),
         )]
 
-    # --- Multi-speaker path (post-MVP) ---
-    if diar_segments is not None and len(significant) >= 2:
-        # Delegate to diarize module for full multi-segment timeline construction
-        from .diarize import link_timeline  # lazy import, optional dep
-        return link_timeline(
-            diar_segments=diar_segments,
-            bbox_clusters=significant,
-            per_frame_bboxes=per_frame_bboxes,
-            fps=fps,
-            clip_duration=clip_duration,
-        )
+    # --- Multi-speaker path: diarization-driven timeline with mouth-motion linking ---
+    if diar_segments is not None and len(significant) >= 2 and video_path is not None:
+        from .diarize import link_timeline  # lazy import — optional dep
+        try:
+            return link_timeline(
+                diar_segments=diar_segments,
+                bbox_clusters=significant,
+                per_frame_bboxes=per_frame_bboxes,
+                fps=fps,
+                clip_duration=clip_duration,
+                video_path=video_path,
+                cfg=cfg,
+            )
+        except Exception as e:  # noqa: BLE001 — fall back to multi-shot on any failure
+            log.warning(f"link_timeline failed ({e}); falling back to multi-shot timeline")
 
-    # --- MVP: pick the most persistent cluster, single-entry timeline ---
-    primary_cluster = max(significant, key=len)
+    # --- Multi-shot path (MVP): multiple camera angles detected. Produce one
+    # timeline segment per shot rather than picking one cluster globally. ---
+    if len(significant) >= 2:
+        log.info(
+            f"Multi-shot clip: {len(significant)} camera angles; "
+            "emitting per-shot timeline segments"
+        )
+        return _multi_shot_timeline(significant, per_frame_bboxes, clip_duration, fps)
+
+    # --- Single-shot path: one persistent cluster, one timeline segment ---
+    primary_cluster = significant[0]
     persistence = _cluster_persistence(primary_cluster, total_frames)
     log.info(
         f"Using primary cluster: {len(primary_cluster)}/{total_frames} frames "

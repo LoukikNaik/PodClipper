@@ -11,12 +11,44 @@ Example:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
-from src.config import load_config
-from src.logging_util import setup_logging
-from src.pipeline import run_pipeline
+
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    """Minimal .env loader — populates os.environ from `KEY=value` lines.
+
+    Shell env vars take precedence, so pre-set values are never overwritten.
+    Accepts optional surrounding quotes and `export KEY=value` prefix.
+    Comments (`#`) and blank lines are skipped.
+    """
+    if not path.exists():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        # Strip paired quotes
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+# Load `.env` BEFORE importing anything that reads env vars (e.g. src.llm).
+_load_dotenv()
+
+from src.config import load_config  # noqa: E402
+from src.logging_util import setup_logging  # noqa: E402
+from src.pipeline import run_pipeline  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +82,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render auxiliary debug video with bbox + crop overlay",
     )
     p.add_argument(
+        "--debug-detect", action="store_true",
+        help=(
+            "Write debug_detect.mp4 and debug_mouth.mp4 per clip — "
+            "shows front/back face labels (green=front, orange=back), "
+            "selected primary (thick border), face bbox (cyan), "
+            "and mouth-openness boxes (green=talking, blue=silent)"
+        ),
+    )
+    p.add_argument(
         "--no-cache", action="store_true",
         help="Ignore cached intermediate artifacts and rebuild from scratch",
     )
@@ -76,6 +117,8 @@ def apply_cli_overrides(cfg, args) -> None:
         cfg.analyze.target_clips = args.max_clips
     if args.debug_crop:
         cfg.crop.debug_overlay = True
+    if args.debug_detect:
+        cfg.detect.debug_overlay = True
     if args.verbose:
         cfg.logging.level = "DEBUG"
 

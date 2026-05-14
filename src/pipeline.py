@@ -46,9 +46,11 @@ from .detect import detect_humans_per_frame
 from .ingest import ingest
 from .llm import build_provider
 from .logging_util import get_console
+from .evaluate import evaluate_reel
 from .subtitles import burn_subtitles
 from .timeline import apply_min_dwell, build_speaker_timeline
 from .transcribe import transcribe_first_pass, transcribe_second_pass
+from .transcribe_cleanup import cleanup_words
 from .types import Clip, VideoMeta
 
 log = logging.getLogger("ave.pipeline")
@@ -103,17 +105,17 @@ def _extract_clip_segment(
     return out_path
 
 
-def _maybe_diarize(segment_path: Path, per_frame_bboxes, cfg: SimpleNamespace):
-    """Post-MVP hook. Currently returns None; enabling flips in diarize.py."""
+def _maybe_diarize(segment_path: Path, cfg: SimpleNamespace):
+    """Run speaker diarization on a clip if enabled in config. Returns
+    list[DiarSegment] | None (None on disabled, missing HF token, or any failure)."""
     if not getattr(cfg.diarize, "enabled", False):
         return None
     try:
-        from .diarize import diarize_clip  # noqa: F401 — future module
-    except ImportError:
-        log.warning("diarize.enabled=true but diarize module not available; skipping.")
+        from .diarize import diarize_clip
+    except ImportError as e:
+        log.warning(f"diarize.enabled=true but dependencies missing: {e}")
         return None
-    from .diarize import diarize_clip
-    return diarize_clip(segment_path, per_frame_bboxes, cfg)
+    return diarize_clip(segment_path, cfg)
 
 
 # ---------- main entry ----------
@@ -144,6 +146,12 @@ def run_pipeline(
     transcript = transcribe_first_pass(audio_wav, meta.duration, cfg)
     # TODO: could persist transcript JSON here for resume; skipping for MVP
 
+    # Pin second-pass language to the first-pass detection so Whisper doesn't
+    # flip between Hindi/Urdu/etc. across clips (produces unreadable subtitles).
+    if cfg.transcribe.language is None and transcript.language:
+        log.info(f"Pinning transcribe language to first-pass detection: {transcript.language}")
+        cfg.transcribe.language = transcript.language
+
     # --- Stage 4: LLM analysis ---
     provider = build_provider(cfg.llm)
     clips = analyze_for_reels(transcript, meta.duration, provider, cfg)
@@ -152,8 +160,12 @@ def run_pipeline(
         return []
 
     # --- Stage 5: Per-clip loop ---
-    output_dir = Path(cfg.paths.output_dir)
+    # Timestamped output directory so previous runs are preserved.
+    from datetime import datetime
+    run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = Path(cfg.paths.output_dir) / run_stamp
     output_dir.mkdir(parents=True, exist_ok=True)
+    log.info(f"Output directory: {output_dir}")
 
     produced: list[Path] = []
 
@@ -191,9 +203,13 @@ def run_pipeline(
                 # Run transcription + diarization concurrently (I/O + CPU bound; they don't share state).
                 with ThreadPoolExecutor(max_workers=2) as ex:
                     f_words = ex.submit(transcribe_second_pass, segment_path, cfg)
-                    f_diar = ex.submit(_maybe_diarize, segment_path, per_frame, cfg)
+                    f_diar = ex.submit(_maybe_diarize, segment_path, cfg)
                     words = f_words.result()
                     diar_segments = f_diar.result()
+
+                # LLM cleanup pass — fix English spelling, romanize non-Latin scripts.
+                # Runs serially after second-pass because it consumes the transcribed words.
+                words = cleanup_words(words, provider, cfg)
 
                 # Clip duration from frame count (ffmpeg clip may be slightly longer than requested)
                 clip_duration = len(per_frame) / clip_fps if clip_fps else (clip.duration + 2 * cfg.clip_extract.pad_seconds)
@@ -206,6 +222,7 @@ def run_pipeline(
                     source_height=clip_h,
                     diar_segments=diar_segments,
                     cfg=cfg,
+                    video_path=segment_path,
                 )
                 timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
 
@@ -213,20 +230,49 @@ def run_pipeline(
                 cropped_path = clip_cache / "cropped.mp4"
                 smart_crop_916(segment_path, timeline, cropped_path, cfg)
 
-                # Subtitles
+                # Subtitles + fading title overlay
                 final_path = output_dir / f"{stem}.mp4"
-                burn_subtitles(cropped_path, words, final_path, cfg)
+                burn_subtitles(cropped_path, words, final_path, cfg, title=clip.title)
 
-                # Persist a tiny sidecar describing the clip
-                (output_dir / f"{stem}.txt").write_text(
+                # Persist sidecar describing the clip
+                sidecar_path = output_dir / f"{stem}.txt"
+                sidecar_path.write_text(
                     f"title: {clip.title}\n"
                     f"reason: {clip.reason}\n"
                     f"source_start: {clip.start:.2f}\n"
                     f"source_end: {clip.end:.2f}\n"
                     f"hook_score: {clip.hook_score:.2f}\n"
                 )
-                produced.append(final_path)
-                log.info(f"[{i}/{len(clips)}] Done: {final_path}")
+
+                # Quality evaluation — technical metrics + LLM-as-judge
+                non_null = sum(1 for b in per_frame if b is not None)
+                x_centers = [b.x_center for b in per_frame if b is not None]
+                scorecard = evaluate_reel(
+                    title=clip.title,
+                    words=words,
+                    clip_duration=clip_duration,
+                    face_hits=non_null,    # approximation; true face_hits logged separately
+                    total_frames=len(per_frame),
+                    person_frames=non_null,
+                    x_centers=x_centers,
+                    source_width=clip_w,
+                    provider=provider,
+                    cfg=cfg,
+                )
+                scorecard.write_to(sidecar_path)
+
+                # Auto-skip low-quality reels if configured
+                eval_cfg = getattr(cfg, "evaluate", None)
+                if (eval_cfg and getattr(eval_cfg, "auto_skip", False)
+                        and scorecard.verdict == "skip"):
+                    skip_dir = output_dir / "skipped"
+                    skip_dir.mkdir(exist_ok=True)
+                    final_path.rename(skip_dir / final_path.name)
+                    sidecar_path.rename(skip_dir / sidecar_path.name)
+                    log.warning(f"[{i}/{len(clips)}] Auto-skipped (score {scorecard.final_score:.2f}): {clip.title}")
+                else:
+                    produced.append(final_path)
+                    log.info(f"[{i}/{len(clips)}] Done ({scorecard.verdict}): {final_path}")
 
             except Exception as exc:  # noqa: BLE001 — per-clip boundary, keep going
                 log.exception(f"[{i}/{len(clips)}] Failed: {clip.title}: {exc}")

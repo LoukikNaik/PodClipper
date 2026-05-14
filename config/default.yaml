@@ -25,6 +25,11 @@ transcribe:
     device: auto
     beam_size: 5                 # accuracy matters more here (subtitles)
     word_timestamps: true
+  cleanup:                       # LLM post-processing of second-pass words
+    enabled: true
+    transliterate: true          # romanize non-Latin scripts (Hindi, Urdu, Arabic, ...)
+    fix_spelling: true           # correct obvious whisper mis-transcriptions
+    max_tokens_per_call: 2000    # safety cap
 
 llm:
   provider: claude_cli           # claude_cli | anthropic_api
@@ -55,6 +60,11 @@ detect:
   iou: 0.5
   sample_every_n_frames: 1       # 1 = every frame; bump for speed
   person_class_id: 0
+  face_aware: true               # run MediaPipe face detection inside the person bbox
+                                 # and use the face center for cropping — prevents the
+                                 # crop from drifting to hands/torso during gestures
+  debug_overlay: false           # write debug_detect.mp4 and debug_mouth.mp4 per clip
+                                 # showing front/back face labels + mouth-openness boxes
 
 crop:
   target_width: 1080
@@ -76,13 +86,38 @@ subtitles:
   shadow: 1
   margin_v: 360                  # from bottom; positions subs in lower third of 1920px frame
   max_chars_per_line: 20
+  fade_out_seconds: 0.6          # fade video to black + fade audio out over the last N seconds
+  title_overlay:
+    enabled: true
+    duration_seconds: 3.5        # total time the title is on screen (fade-out included)
+    fade_seconds: 0.7            # length of the fade-out at the end
+    font_size: 96                # large bold — must be readable in < 1 second
+    max_chars_per_line: 18       # forces 2-line wrap for punch; short lines hit harder
+    y_offset: 200                # pixels from top — sits in the safe zone below status bar
+    line_spacing: 16
+    color: "&H00FFFFFF"          # white text
+    outline_color: "&H00000000"  # black outline for contrast on any background
+    outline_width: 6
+    pill_enabled: false          # disabled — using gradient backdrop instead (cleaner)
+    pill_color: "&HA0000000"
+    pill_padding_x: 40
+    pill_padding_y: 20
+    pill_corner_radius: 28
+    gradient_enabled: true       # dark gradient at top 30% of frame for text readability
+    gradient_opacity: 0.55       # semi-transparent dark sweep
 
-diarize:                         # post-MVP
-  enabled: false                 # flip to true once pyannote is installed
+diarize:                         # pyannote-driven multi-speaker follow-the-speaker crop
+  enabled: true                  # requires HF_TOKEN in .env (see .env.example)
   hf_token_env: HF_TOKEN
   model: pyannote/speaker-diarization-3.1
   min_speakers: null
   max_speakers: null
+
+evaluate:
+  enabled: true                  # run LLM-as-judge after each reel is rendered
+  auto_skip: false               # if true, reels with verdict "skip" are moved to skipped/ dir
+  skip_threshold: 3.0            # overall content score below this → "skip"
+  publish_threshold: 4.0         # overall content score at/above this → "publish"
 
 logging:
   level: INFO
