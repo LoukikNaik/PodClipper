@@ -132,55 +132,103 @@ def _get_face_detector(cfg: SimpleNamespace):
     return _face_detector if _face_detector else None
 
 
-def _face_bbox_inside(frame_bgr, person: BBox, detector) -> Optional[BBox]:
-    """Run face detection on the region around `person` and return the face
-    bbox whose center falls inside `person`, or None if no suitable face found.
-
-    Coordinates are converted back to the source frame (not the crop window).
-    """
+def _detect_faces_full_frame(frame_bgr, detector) -> list[BBox]:
+    """Run face detection once on the full frame. Returns face bboxes in source
+    pixel coordinates. Used for single-pass attribution to person bboxes —
+    avoids the cross-leakage bug where a neighbor's face falls inside another
+    person's padded crop and is misattributed."""
     import mediapipe as mp
 
-    H, W = frame_bgr.shape[:2]
-    # Pad the crop so a face near the bbox edge isn't missed
-    pad_x = int(0.15 * person.w)
-    pad_y = int(0.15 * person.h)
-    x0 = max(0, int(person.x) - pad_x)
-    y0 = max(0, int(person.y) - pad_y)
-    x1 = min(W, int(person.x + person.w) + pad_x)
-    y1 = min(H, int(person.y + person.h) + pad_y)
-    if x1 <= x0 or y1 <= y0:
-        return None
-
-    crop = frame_bgr[y0:y1, x0:x1]
-    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
     try:
         result = detector.detect(mp_image)
     except Exception:  # noqa: BLE001
-        return None
-    if not result.detections:
-        return None
-
-    # Pick the face whose center lies inside the person bbox (there may be
-    # multiple face detections if two people are near each other).
-    best: Optional[BBox] = None
-    best_area = 0.0
+        return []
+    out: list[BBox] = []
     for det in result.detections:
         bb = det.bounding_box
-        fx = x0 + bb.origin_x
-        fy = y0 + bb.origin_y
-        fw = bb.width
-        fh = bb.height
-        face_cx = fx + fw / 2
-        face_cy = fy + fh / 2
-        # Require the face center to lie within the person bbox
-        if not (person.x <= face_cx <= person.x + person.w and
-                person.y <= face_cy <= person.y + person.h):
+        score = det.categories[0].score if det.categories else 0.0
+        out.append(BBox(
+            x=float(bb.origin_x),
+            y=float(bb.origin_y),
+            w=float(bb.width),
+            h=float(bb.height),
+            confidence=float(score),
+        ))
+    return out
+
+
+def _face_person_score(face: BBox, person: BBox) -> float:
+    """Score how strongly `face` belongs to `person`.
+
+    Returns 0.0 if any of these strict tests fail:
+      - Face center vertically in the upper 60% of the person bbox
+        (a real face sits on top of a body; a face leaking in from a
+        neighbor often appears at mic/chest height).
+      - Majority of the face's area lies inside the person bbox (≥ 0.5).
+      - Face is wider than ~5% of person width (filters tiny FP detections).
+
+    Otherwise returns the fraction of face area inside the person bbox,
+    so greedy assignment naturally prefers the most-enclosed face.
+    """
+    if person.w <= 0 or person.h <= 0 or face.w <= 0 or face.h <= 0:
+        return 0.0
+
+    face_cy = face.y + face.h / 2
+    if face_cy < person.y or face_cy > person.y + 0.6 * person.h:
+        return 0.0
+
+    ix1 = max(face.x, person.x)
+    iy1 = max(face.y, person.y)
+    ix2 = min(face.x + face.w, person.x + person.w)
+    iy2 = min(face.y + face.h, person.y + person.h)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    face_area = face.w * face.h
+    enclosed = inter / face_area
+    if enclosed < 0.5:
+        return 0.0
+
+    if face.w < 0.05 * person.w:
+        return 0.0
+    return enclosed
+
+
+def _attribute_faces_to_persons(
+    persons: list[BBox],
+    faces: list[BBox],
+) -> list[Optional[BBox]]:
+    """Greedily assign each face to at most one person.
+
+    Returns `face_for_person[i]` aligned with `persons`. A face is assigned to
+    its highest-scoring person (per `_face_person_score`), and each face/person
+    can only be matched once — so a face that overlaps two person bboxes does
+    NOT get attributed to both.
+    """
+    out: list[Optional[BBox]] = [None] * len(persons)
+    if not persons or not faces:
+        return out
+
+    # Build all (face_idx, person_idx, score) triples, sort high → low.
+    pairs: list[tuple[int, int, float]] = []
+    for fi, face in enumerate(faces):
+        for pi, person in enumerate(persons):
+            s = _face_person_score(face, person)
+            if s > 0.0:
+                pairs.append((fi, pi, s))
+    pairs.sort(key=lambda t: t[2], reverse=True)
+
+    used_face: set[int] = set()
+    used_person: set[int] = set()
+    for fi, pi, _ in pairs:
+        if fi in used_face or pi in used_person:
             continue
-        if fw * fh > best_area:
-            best_area = fw * fh
-            best = BBox(x=fx, y=fy, w=fw, h=fh, confidence=person.confidence)
-    return best
+        out[pi] = faces[fi]
+        used_face.add(fi)
+        used_person.add(pi)
+    return out
 
 
 def _pick_primary(
@@ -203,13 +251,16 @@ def _run_face_on_all(
     candidates: list[BBox],
     detector,
 ) -> list[tuple[BBox, Optional[BBox]]]:
-    """Run face detection on every candidate person bbox.
+    """Detect faces once on the full frame, then attribute each face to at most
+    one person bbox via `_attribute_faces_to_persons`.
 
     Returns a list of (person_bbox, face_bbox_or_None).
-    A non-None face_bbox means the person is front-facing.
+    A non-None face_bbox means the person is front-facing AND owns that face
+    exclusively — preventing the back-of-head / neighbor-face leakage bug.
     """
-    return [(person, _face_bbox_inside(frame_bgr, person, detector))
-            for person in candidates]
+    faces = _detect_faces_full_frame(frame_bgr, detector)
+    face_per_person = _attribute_faces_to_persons(candidates, faces)
+    return list(zip(candidates, face_per_person))
 
 
 def _pick_primary_face_aware(
