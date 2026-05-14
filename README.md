@@ -6,26 +6,35 @@ Turn a long-form podcast, talk or interview into vertical 9:16 reels — locally
 
 ## Demo reels
 
-Three reels generated end-to-end from a single ~60-minute podcast episode.
+Three reels generated end-to-end from a single ~60-minute podcast episode. Previews loop silently below — **click any tile to open the full MP4 with audio.**
 
 <table>
   <tr>
-    <td align="center">
-      <video src="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_why-ravan-could-never-break-sita.mp4" controls width="260"></video>
+    <td align="center" width="33%">
+      <a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_why-ravan-could-never-break-sita.mp4">
+        <img src="docs/demos/reel_01.gif" width="240" alt="Reel 1 preview"/>
+      </a>
       <br/><em>"Why Ravan Could Never Break Sita"</em>
+      <br/><sub><a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_why-ravan-could-never-break-sita.mp4">▶ play with audio</a></sub>
     </td>
-    <td align="center">
-      <video src="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_she-reached-for-death-found-hope.mp4" controls width="260"></video>
+    <td align="center" width="33%">
+      <a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_she-reached-for-death-found-hope.mp4">
+        <img src="docs/demos/reel_02.gif" width="240" alt="Reel 2 preview"/>
+      </a>
       <br/><em>"She Reached for Death, Found Hope"</em>
+      <br/><sub><a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_she-reached-for-death-found-hope.mp4">▶ play with audio</a></sub>
     </td>
-    <td align="center">
-      <video src="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_03_how-hanuman-knew-it-was-sita.mp4" controls width="260"></video>
+    <td align="center" width="33%">
+      <a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_03_how-hanuman-knew-it-was-sita.mp4">
+        <img src="docs/demos/reel_03.gif" width="240" alt="Reel 3 preview"/>
+      </a>
       <br/><em>"How Hanuman Knew It Was Sita"</em>
+      <br/><sub><a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_03_how-hanuman-knew-it-was-sita.mp4">▶ play with audio</a></sub>
     </td>
   </tr>
 </table>
 
-Originals also playable at the [live demo site](https://podclipper.loukik.dev).
+For full-screen playback with audio inline, visit the [live demo site](https://podclipper.loukik.dev).
 
 ## Pipeline
 
