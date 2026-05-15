@@ -136,12 +136,16 @@ python main.py video.mp4 --output-dir outputs --max-clips 5 -v
 # Re-render reels from cache, optionally filtered to a previous run's sidecars
 python regen_crops.py .cache/<video>-<hash> outputs/regen_run [outputs/<orig>]
 
-# Standalone debug / experimentation
-python debug_detect_clip.py outputs/segment.mp4    # YOLO + face overlay
-python diag_frame.py path/to/segment.mp4 1380 40   # per-frame bbox/cluster dump
-python stacked_crop_test.py path/to/video.mp4      # standalone shot-aware prototype
-python diarize_compare.py audio.wav                # pyannote vs Resemblyzer
-python mouth_speaker_test.py video.mp4             # mouth-motion speaker ID test
+# Standalone debug (kept at root — active tools)
+python debug_detect_clip.py outputs/segment.mp4         # YOLO + face overlay
+python diag_frame.py path/to/segment.mp4 1380 40        # per-frame bbox/cluster dump
+
+# One-off experiments (moved under experiments/; results encoded in
+# this doc — re-run only if a hypothesis comes back)
+python experiments/stacked_crop_test.py path/to/video.mp4   # shot-aware prototype (now in src/crop.py)
+python experiments/diarize_compare.py audio.wav             # pyannote vs Resemblyzer — both lost
+python experiments/mouth_speaker_test.py video.mp4          # mouth-motion speaker ID — negative result
+python experiments/highlight_faces.py in.mp4 out.mp4        # MediaPipe face-bbox overlay utility
 ```
 
 ## LLM provider
