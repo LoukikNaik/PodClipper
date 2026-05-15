@@ -87,6 +87,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# ---------- Claude Code runtime ----------
+.claude/
+
 # ---------- IDE / OS ----------
 .vscode/
 .idea/
