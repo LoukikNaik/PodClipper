@@ -41,14 +41,14 @@ from rich.progress import (
 
 from .analyze import analyze_for_reels
 from .audio import extract_audio
-from .crop import smart_crop_916
-from .detect import detect_humans_per_frame
+from .crop import smart_crop_916, smart_crop_916_stacked
+from .detect import detect_humans_per_frame, detect_humans_all_per_frame
 from .ingest import ingest
 from .llm import build_provider
 from .logging_util import get_console
 from .evaluate import evaluate_reel
 from .subtitles import burn_subtitles
-from .timeline import apply_min_dwell, build_speaker_timeline
+from .timeline import apply_min_dwell, build_speaker_timeline, classify_wide_shot_frames
 from .transcribe import transcribe_first_pass, transcribe_second_pass_cached
 from .transcribe_cleanup import cleanup_words
 from .types import Clip, VideoMeta
@@ -196,17 +196,33 @@ def run_pipeline(
                         cfg.clip_extract.pad_seconds, segment_path, cfg,
                     )
 
-                # Per-frame detection up front (provides the bbox list to
-                # both timeline and diarization stages).
-                per_frame, clip_fps, clip_w, clip_h = detect_humans_per_frame(segment_path, cfg)
-
-                # Run transcription + diarization concurrently (I/O + CPU bound; they don't share state).
+                crop_mode = getattr(cfg.crop, "mode", "auto")
                 words_cache = clip_cache / "words.json" if use_cache else None
-                with ThreadPoolExecutor(max_workers=2) as ex:
-                    f_words = ex.submit(transcribe_second_pass_cached, segment_path, words_cache, cfg)
-                    f_diar = ex.submit(_maybe_diarize, segment_path, cfg)
-                    words = f_words.result()
-                    diar_segments = f_diar.result()
+
+                # Branch on crop mode. "auto" uses the shot-aware stacked
+                # renderer and skips diarization entirely; "single" keeps
+                # the legacy single-crop + timeline + (optional) diarization
+                # path for backward compatibility.
+                per_frame_persons: list[list] = []   # populated only in auto mode
+
+                if crop_mode == "auto":
+                    per_frame_persons, _per_frame_has_face, clip_fps, clip_w, clip_h = (
+                        detect_humans_all_per_frame(segment_path, cfg)
+                    )
+                    words = transcribe_second_pass_cached(segment_path, words_cache, cfg)
+                    # Derive a single primary per frame for downstream
+                    # evaluation stats (x_centers, person_frames, etc.).
+                    per_frame = [
+                        max(ps, key=lambda b: b.area) if ps else None
+                        for ps in per_frame_persons
+                    ]
+                else:
+                    per_frame, clip_fps, clip_w, clip_h = detect_humans_per_frame(segment_path, cfg)
+                    with ThreadPoolExecutor(max_workers=2) as ex:
+                        f_words = ex.submit(transcribe_second_pass_cached, segment_path, words_cache, cfg)
+                        f_diar = ex.submit(_maybe_diarize, segment_path, cfg)
+                        words = f_words.result()
+                        diar_segments = f_diar.result()
 
                 # LLM cleanup pass — fix English spelling, romanize non-Latin scripts.
                 # Runs serially after second-pass because it consumes the transcribed words.
@@ -215,21 +231,32 @@ def run_pipeline(
                 # Clip duration from frame count (ffmpeg clip may be slightly longer than requested)
                 clip_duration = len(per_frame) / clip_fps if clip_fps else (clip.duration + 2 * cfg.clip_extract.pad_seconds)
 
-                timeline = build_speaker_timeline(
-                    per_frame_bboxes=per_frame,
-                    clip_duration=clip_duration,
-                    fps=clip_fps,
-                    source_width=clip_w,
-                    source_height=clip_h,
-                    diar_segments=diar_segments,
-                    cfg=cfg,
-                    video_path=segment_path,
-                )
-                timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
-
-                # Crop
                 cropped_path = clip_cache / "cropped.mp4"
-                smart_crop_916(segment_path, timeline, cropped_path, cfg)
+                if crop_mode == "auto":
+                    is_wide = classify_wide_shot_frames(
+                        per_frame_persons,
+                        source_width=clip_w,
+                        source_height=clip_h,
+                        sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
+                        height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
+                        smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                    )
+                    smart_crop_916_stacked(
+                        segment_path, per_frame_persons, is_wide, cropped_path, cfg,
+                    )
+                else:
+                    timeline = build_speaker_timeline(
+                        per_frame_bboxes=per_frame,
+                        clip_duration=clip_duration,
+                        fps=clip_fps,
+                        source_width=clip_w,
+                        source_height=clip_h,
+                        diar_segments=diar_segments,
+                        cfg=cfg,
+                        video_path=segment_path,
+                    )
+                    timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
+                    smart_crop_916(segment_path, timeline, cropped_path, cfg)
 
                 # Subtitles + fading title overlay
                 final_path = output_dir / f"{stem}.mp4"

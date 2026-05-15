@@ -20,6 +20,8 @@ import logging
 from types import SimpleNamespace
 from typing import Optional
 
+import numpy as np
+
 from .types import BBox, Timeline, TimelineSegment
 
 log = logging.getLogger("ave.timeline")
@@ -352,4 +354,55 @@ def apply_min_dwell(timeline: Timeline, min_dwell_seconds: float) -> Timeline:
             )
         else:
             out.append(seg)
+    return out
+
+
+# ---------- Wide-shot classifier (for the shot-aware stacked crop) -------
+
+def classify_wide_shot_frames(
+    per_frame_persons: list[list[BBox]],
+    source_width: int,
+    source_height: int,
+    sep_threshold_frac: float = 0.20,
+    height_cap_frac: float = 0.70,
+    smooth_window_frames: int = 15,
+) -> "np.ndarray":
+    """Decide, for each frame, whether it's a wide shot (two visible people)
+    or a single-person/close-up shot, based on YOLO bbox geometry alone.
+
+    A frame qualifies as "raw wide" if:
+      * ≥ 2 person bboxes each shorter than `height_cap_frac * source_height`,
+        which excludes the typical single-person close-up where one bbox
+        fills most of the frame, and
+      * the leftmost and rightmost qualifying bboxes are separated by at
+        least `sep_threshold_frac * source_width`, ruling out two
+        near-overlapping detections of the same person.
+
+    A centered window of `smooth_window_frames` frames is then applied:
+    `is_wide[t]` is True iff at least half of the raw decisions inside that
+    window are True. This eliminates flicker when YOLO momentarily misses
+    one person during a wide shot, or briefly double-detects in a close-up.
+
+    Returns a bool ndarray of length `len(per_frame_persons)`.
+    """
+    n = len(per_frame_persons)
+    if n == 0:
+        return np.zeros(0, dtype=bool)
+
+    sep_thresh = sep_threshold_frac * source_width
+    height_cap = height_cap_frac * source_height
+
+    raw = np.zeros(n, dtype=bool)
+    for i, persons in enumerate(per_frame_persons):
+        qual = [p.x_center for p in persons if p.h < height_cap]
+        if len(qual) >= 2 and (max(qual) - min(qual)) >= sep_thresh:
+            raw[i] = True
+
+    win = max(1, int(smooth_window_frames))
+    half = win // 2
+    out = np.zeros(n, dtype=bool)
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        out[i] = raw[lo:hi].mean() >= 0.5
     return out

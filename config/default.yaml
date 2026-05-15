@@ -67,14 +67,33 @@ detect:
                                  # showing front/back face labels + mouth-openness boxes
 
 crop:
+  mode: auto                     # auto: shot-aware (single ↔ stacked dual-panel)
+                                 # single: legacy single 9:16 follow-the-speaker crop
   target_width: 1080
   target_height: 1920
-  smoothing_alpha: 0.1           # EMA for x-center within a segment; lower = smoother
-  min_segment_dwell_seconds: 0.8 # merge segments shorter than this
+  smoothing_alpha: 0.1           # EMA for x-center within a segment (single mode only)
+  min_segment_dwell_seconds: 0.8 # merge segments shorter than this (single mode only)
   debug_overlay: false
   ffmpeg_encoder: libx264
   ffmpeg_crf: 20
   ffmpeg_preset: medium
+  # Shot classifier (auto mode): when a frame has ≥2 person bboxes that are
+  # each <height_cap_frac of source height AND separated by >=sep_frac of
+  # source width, the frame is "wide" and gets stacked dual-panel rendering.
+  shot_sep_frac: 0.20
+  shot_height_cap_frac: 0.70
+  shot_smooth_window_frames: 15   # 0.5s @ 30fps; majority rule for shot-type
+  # Per-panel framing (auto mode): pose-anchored crop with body-bbox IoU
+  # hysteresis. Crop bbox stays locked while body IoU >= threshold; only
+  # updates when the speaker actually moves enough.
+  stacked_iou_threshold: 0.70
+  stacked_miss_tolerance: 15      # hold lock during up to N consecutive misses
+  stacked_snap_px: 8              # snap crop dims to multiples of this for stability
+  stacked_top_is_right: false     # false: leftmost person in top panel; true: rightmost
+  stacked_transition_frames: 12   # when lock breaks, lerp crop bbox over this many
+                                  # frames (~0.4s @ 30fps). Higher = smoother but
+                                  # slower to settle on a new framing. Set to 1 for
+                                  # the old hard-cut behavior.
 
 subtitles:
   font_name: "Arial"

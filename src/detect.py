@@ -476,3 +476,96 @@ def detect_humans_per_frame(
         f"({100 * non_null / max(1, len(out)):.1f}%)"
     )
     return out, fps, width, height
+
+
+def detect_humans_all_per_frame(
+    video_path: Path,
+    cfg: SimpleNamespace,
+) -> tuple[list[list[BBox]], list[list[bool]], float, int, int]:
+    """Like `detect_humans_per_frame` but returns ALL detected persons per
+    frame (not just the primary), plus a parallel face-attribution flag list.
+
+    Used by the shot-aware stacked crop renderer, which needs to know about
+    multiple people in wide shots and can't make do with the single primary
+    bbox stored by `detect_humans_per_frame`.
+
+    Returns:
+        (per_frame_persons, per_frame_has_face, fps, width, height)
+          - per_frame_persons[i] = list of BBox detected in frame i
+          - per_frame_has_face[i][j] = True iff the jth person in frame i
+            had a face that passed _attribute_faces_to_persons' strict gate
+          - Length always equals the source frame count; entries may be
+            empty lists when no person was detected.
+
+    Always runs detection per frame (no sample_every_n_frames carry-forward)
+    because the stacked path's body-IoU hysteresis needs current detections
+    every frame to decide if the locked crop should hold or update.
+    """
+    video_path = Path(video_path)
+    det_cfg = cfg.detect
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise DetectError(f"OpenCV could not open {video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    model, device = _get_yolo(det_cfg.model, det_cfg.device)
+    face_detector = _get_face_detector(cfg) if getattr(det_cfg, "face_aware", True) else None
+
+    log.info(
+        f"Multi-person detection on {video_path.name}: "
+        f"{total_frames} frames @ {fps:.2f}fps"
+        + (", face-aware tagging enabled" if face_detector else "")
+    )
+
+    per_frame_persons: list[list[BBox]] = []
+    per_frame_has_face: list[list[bool]] = []
+    frame_idx = 0
+    multi_person_frames = 0
+
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+
+        results = model.predict(
+            frame,
+            conf=det_cfg.confidence,
+            iou=det_cfg.iou,
+            device=device,
+            verbose=False,
+            classes=[det_cfg.person_class_id],
+        )
+
+        bboxes: list[BBox] = []
+        has_face: list[bool] = []
+        if results:
+            bboxes = _detections_to_bboxes(
+                results[0],
+                person_class_id=det_cfg.person_class_id,
+                conf_threshold=det_cfg.confidence,
+            )
+            if face_detector is not None and bboxes:
+                tagged = _run_face_on_all(frame, bboxes, face_detector)
+                has_face = [f is not None for _, f in tagged]
+            else:
+                has_face = [False] * len(bboxes)
+
+        per_frame_persons.append(bboxes)
+        per_frame_has_face.append(has_face)
+        if len(bboxes) >= 2:
+            multi_person_frames += 1
+        frame_idx += 1
+
+    cap.release()
+
+    log.info(
+        f"Multi-person detection complete: {frame_idx} frames, "
+        f"{multi_person_frames} ({100*multi_person_frames/max(1,frame_idx):.1f}%) "
+        f"with ≥2 persons"
+    )
+    return per_frame_persons, per_frame_has_face, fps, width, height
