@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-"""Re-render existing cached reels with the latest detect.py crop logic.
+"""Re-render existing cached reels with the latest crop logic.
 
-Skips LLM clip selection and diarization. Runs Whisper second-pass (cached
-to `words.json` under each reel cache dir, so repeat runs are instant) and
-re-burns karaoke subtitles + title overlay using the previous reel's title.
+Skips LLM clip selection, audio extract, and first-pass Whisper. Uses the
+cached `segment.mp4` and `words.json` under each reel cache directory.
+
+Crop mode follows `cfg.crop.mode`:
+  * "auto" (default in current config) → shot-aware path:
+      detect_humans_all_per_frame → classify_wide_shot_frames →
+      smart_crop_916_stacked → burn_subtitles
+  * "single" → legacy single-crop path:
+      detect_humans_per_frame → build_speaker_timeline →
+      smart_crop_916 → burn_subtitles
+  (diarization is never invoked from this script regardless of mode)
+
+If `words.json` is missing it runs Whisper second-pass and caches the
+result so subsequent invocations are instant.
 
 Usage:
     python regen_crops.py CACHE_DIR OUTPUT_DIR [SIDECAR_DIR]
 
-  CACHE_DIR     e.g. .cache/RiHi4solYHE_part6-adb85d8f31
+  CACHE_DIR     e.g. .cache/yt_9FtradY1AI4_first20-cd9eb04f85
   OUTPUT_DIR    a fresh directory to write reels into
   SIDECAR_DIR   optional — directory containing the original reel_*.txt
-                files; titles are parsed from them and used for the title
-                overlay. Defaults to the matching outputs/<timestamp>/ if
-                one can be inferred; otherwise titles are empty.
+                sidecars; titles are parsed for the title overlay.
 """
 
 import re
@@ -23,11 +32,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from src.config import load_config
-from src.crop import smart_crop_916
-from src.detect import detect_humans_per_frame
+from src.crop import smart_crop_916, smart_crop_916_stacked
+from src.detect import detect_humans_per_frame, detect_humans_all_per_frame
 from src.logging_util import setup_logging
 from src.subtitles import burn_subtitles
-from src.timeline import apply_min_dwell, build_speaker_timeline
+from src.timeline import (
+    apply_min_dwell,
+    build_speaker_timeline,
+    classify_wide_shot_frames,
+)
 from src.transcribe import transcribe_second_pass_cached
 
 
@@ -57,13 +70,27 @@ def main() -> int:
     cfg = load_config(Path("config/default.yaml"))
     log = setup_logging("INFO")
 
-    reel_dirs = sorted(p for p in cache_dir.iterdir() if p.is_dir() and p.name.startswith("reel_"))
+    crop_mode = getattr(cfg.crop, "mode", "auto")
+
+    reel_dirs = sorted(p for p in cache_dir.iterdir()
+                       if p.is_dir() and p.name.startswith("reel_"))
     if not reel_dirs:
         log.warning(f"No reel_* dirs found in {cache_dir}")
         return 1
-    log.info(f"Found {len(reel_dirs)} cached reels; regenerating with fixed detect.py")
+
+    # If a sidecar dir is provided, restrict to reels whose sidecar exists
+    # there (so this script can target a single previous pipeline run when
+    # the cache holds reels from multiple runs).
     if sidecar_dir:
+        wanted = {p.stem for p in sidecar_dir.glob("reel_*.txt")}
+        if wanted:
+            filtered = [d for d in reel_dirs if d.name in wanted]
+            log.info(f"Filtering to {len(filtered)}/{len(reel_dirs)} reels "
+                     f"matching sidecars in {sidecar_dir}")
+            reel_dirs = filtered
         log.info(f"Reading titles from sidecars in {sidecar_dir}")
+
+    log.info(f"Found {len(reel_dirs)} cached reels; crop mode = {crop_mode!r}")
 
     failures: list[str] = []
     for i, reel_dir in enumerate(reel_dirs, 1):
@@ -75,26 +102,40 @@ def main() -> int:
 
         log.info(f"[{i}/{len(reel_dirs)}] {reel_dir.name}")
         try:
-            per_frame, fps, w, h = detect_humans_per_frame(segment, cfg)
-            duration = len(per_frame) / fps if fps else 0.0
-            timeline = build_speaker_timeline(
-                per_frame_bboxes=per_frame,
-                clip_duration=duration,
-                fps=fps,
-                source_width=w,
-                source_height=h,
-                diar_segments=None,
-                cfg=cfg,
-                video_path=segment,
+            cropped_path = reel_dir / "cropped_regen.mp4"
+            if crop_mode == "auto":
+                persons, _hf, fps, w, h = detect_humans_all_per_frame(segment, cfg)
+                is_wide = classify_wide_shot_frames(
+                    persons,
+                    source_width=w,
+                    source_height=h,
+                    sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
+                    height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
+                    smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                )
+                smart_crop_916_stacked(segment, persons, is_wide, cropped_path, cfg)
+            else:
+                per_frame, fps, w, h = detect_humans_per_frame(segment, cfg)
+                duration = len(per_frame) / fps if fps else 0.0
+                timeline = build_speaker_timeline(
+                    per_frame_bboxes=per_frame,
+                    clip_duration=duration,
+                    fps=fps,
+                    source_width=w,
+                    source_height=h,
+                    diar_segments=None,
+                    cfg=cfg,
+                    video_path=segment,
+                )
+                timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
+                smart_crop_916(segment, timeline, cropped_path, cfg)
+
+            words = transcribe_second_pass_cached(
+                segment, reel_dir / "words.json", cfg,
             )
-            timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
 
-            cropped_path = reel_dir / "cropped_v2.mp4"
-            smart_crop_916(segment, timeline, cropped_path, cfg)
-
-            words = transcribe_second_pass_cached(segment, reel_dir / "words.json", cfg)
-
-            title = _title_from_sidecar(sidecar_dir / f"{reel_dir.name}.txt") if sidecar_dir else ""
+            title = (_title_from_sidecar(sidecar_dir / f"{reel_dir.name}.txt")
+                     if sidecar_dir else "")
 
             final_path = output_dir / f"{reel_dir.name}.mp4"
             burn_subtitles(cropped_path, words, final_path, cfg, title=title)
