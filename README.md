@@ -11,18 +11,18 @@ Three reels generated end-to-end from a single ~60-minute podcast episode. Previ
 <table>
   <tr>
     <td align="center" width="33%">
-      <a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_why-ravan-could-never-break-sita.mp4">
+      <a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_confidence-is-an-output-not-input.mp4">
         <img src="docs/demos/reel_01.gif" width="240" alt="Reel 1 preview"/>
       </a>
-      <br/><em>"Why Ravan Could Never Break Sita"</em>
-      <br/><sub><a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_why-ravan-could-never-break-sita.mp4">▶ play with audio</a></sub>
+      <br/><em>"Confidence Is an Output, Not Input"</em>
+      <br/><sub><a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_01_confidence-is-an-output-not-input.mp4">▶ play with audio</a></sub>
     </td>
     <td align="center" width="33%">
-      <a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_she-reached-for-death-found-hope.mp4">
+      <a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_make-anxiety-sit-in-the-back-seat.mp4">
         <img src="docs/demos/reel_02.gif" width="240" alt="Reel 2 preview"/>
       </a>
-      <br/><em>"She Reached for Death, Found Hope"</em>
-      <br/><sub><a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_she-reached-for-death-found-hope.mp4">▶ play with audio</a></sub>
+      <br/><em>"Make Anxiety Sit in the Back Seat"</em>
+      <br/><sub><a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_02_make-anxiety-sit-in-the-back-seat.mp4">▶ play with audio</a></sub>
     </td>
     <td align="center" width="33%">
       <a href="https://github.com/LoukikNaik/PodClipper/releases/download/demo-assets-v1/reel_03_how-hanuman-knew-it-was-sita.mp4">
