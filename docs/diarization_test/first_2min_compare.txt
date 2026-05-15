@@ -1,0 +1,32 @@
+objc[91209]: Class AVFFrameReceiver is implemented in both /Users/loukiknaik/projects/agentic video editor/.venv/lib/python3.14/site-packages/cv2/.dylibs/libavdevice.61.3.100.dylib (0x10a8083a8) and /opt/homebrew/Cellar/ffmpeg/8.1.1/lib/libavdevice.62.3.101.dylib (0x124020328). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
+objc[91209]: Class AVFAudioReceiver is implemented in both /Users/loukiknaik/projects/agentic video editor/.venv/lib/python3.14/site-packages/cv2/.dylibs/libavdevice.61.3.100.dylib (0x10a8083f8) and /opt/homebrew/Cellar/ffmpeg/8.1.1/lib/libavdevice.62.3.101.dylib (0x124020378). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
+/Users/loukiknaik/projects/agentic video editor/.venv/lib/python3.14/site-packages/webrtcvad.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+
+Input: /tmp/diarize_test_2min.wav
+
+===== pyannote/speaker-diarization-3.1 =====
+  elapsed: 13.3s
+  10 segments, 2 speakers: ['SPEAKER_00', 'SPEAKER_01']
+    [  0.03 -  14.32s]  (14.29s)  SPEAKER_01
+    [ 15.05 -  18.51s]  ( 3.46s)  SPEAKER_01
+    [ 21.46 -  62.65s]  (41.19s)  SPEAKER_00
+    [ 62.69 -  63.77s]  ( 1.08s)  SPEAKER_01
+    [ 63.77 -  77.17s]  (13.40s)  SPEAKER_00
+    [ 77.17 -  77.47s]  ( 0.30s)  SPEAKER_01
+    [ 77.47 -  90.95s]  (13.48s)  SPEAKER_00
+    [ 91.12 -  93.38s]  ( 2.26s)  SPEAKER_00
+    [ 93.92 - 107.96s]  (14.04s)  SPEAKER_00
+    [107.96 - 120.01s]  (12.05s)  SPEAKER_01
+  speaker share (s): {'SPEAKER_01': 31.2, 'SPEAKER_00': 84.4}
+
+===== Resemblyzer (n_clusters=2) =====
+Loaded the voice encoder model on cpu in 0.02 seconds.
+  elapsed: 2.0s
+  5 segments, 2 speakers: ['SPEAKER_00', 'SPEAKER_01']
+    [  0.00 -   6.40s]  ( 6.40s)  SPEAKER_00
+    [  5.20 -   6.80s]  ( 1.60s)  SPEAKER_01
+    [  5.60 -  19.20s]  (13.60s)  SPEAKER_00
+    [ 18.00 -  20.40s]  ( 2.40s)  SPEAKER_01
+    [ 19.20 - 117.60s]  (98.40s)  SPEAKER_00
+  speaker share (s): {'SPEAKER_00': np.float64(118.4), 'SPEAKER_01': np.float64(4.0)}
