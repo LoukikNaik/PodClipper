@@ -343,7 +343,12 @@ def detect_humans_per_frame(
     video_path: Path,
     cfg: SimpleNamespace,
 ) -> tuple[list[Optional[BBox]], float, int, int]:
-    """Run per-frame person detection across the video.
+    """DEPRECATED — legacy `crop.mode: single` only.
+
+    Returns one primary bbox per frame, losing all multi-person info.
+    The active `auto` path uses `detect_humans_all_per_frame` instead.
+
+    Run per-frame person detection across the video.
 
     Returns:
         (bboxes, fps, width, height) — `bboxes[i]` is the primary-subject BBox

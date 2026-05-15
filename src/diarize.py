@@ -1,4 +1,12 @@
-"""Stage 5 (post-MVP): Speaker diarization + mouth-motion face linking.
+"""DEPRECATED — legacy `crop.mode: single` path only.
+
+Not reached when `cfg.crop.mode == "auto"` (the default). The shot-aware
+stacked crop (`src/crop.py::smart_crop_916_stacked`) replaced this entire
+follow-the-speaker design in May 2026 — see CLAUDE.md "Recent architectural
+shift" for why. Kept here for the single-locked-camera podcast escape hatch
+and as historical reference.
+
+Stage 5 (post-MVP): Speaker diarization + mouth-motion face linking.
 
 Purpose: when the source video is a single-camera interview (or any edit
 where the director didn't cut between speakers visually), our multi-shot

@@ -115,6 +115,8 @@ def main() -> int:
                 )
                 smart_crop_916_stacked(segment, persons, is_wide, cropped_path, cfg)
             else:
+                # DEPRECATED legacy branch: cfg.crop.mode == "single".
+                # See src/pipeline.py for the same branch in production.
                 per_frame, fps, w, h = detect_humans_per_frame(segment, cfg)
                 duration = len(per_frame) / fps if fps else 0.0
                 timeline = build_speaker_timeline(

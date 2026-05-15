@@ -68,11 +68,13 @@ detect:
 
 crop:
   mode: auto                     # auto: shot-aware (single ↔ stacked dual-panel)
-                                 # single: legacy single 9:16 follow-the-speaker crop
+                                 # single: DEPRECATED legacy follow-the-speaker
+                                 #   crop (uses diarize + timeline). Kept for
+                                 #   single-locked-camera podcasts only.
   target_width: 1080
   target_height: 1920
-  smoothing_alpha: 0.1           # EMA for x-center within a segment (single mode only)
-  min_segment_dwell_seconds: 0.8 # merge segments shorter than this (single mode only)
+  smoothing_alpha: 0.1           # DEPRECATED — single-mode EMA for x-center within a segment
+  min_segment_dwell_seconds: 0.8 # DEPRECATED — single-mode min segment length
   debug_overlay: false
   ffmpeg_encoder: libx264
   ffmpeg_crf: 20
@@ -125,7 +127,8 @@ subtitles:
     gradient_enabled: true       # dark gradient at top 30% of frame for text readability
     gradient_opacity: 0.55       # semi-transparent dark sweep
 
-diarize:                         # pyannote-driven multi-speaker follow-the-speaker crop
+diarize:                         # DEPRECATED — only consulted by `crop.mode: single`.
+                                 # pyannote-driven multi-speaker follow-the-speaker crop.
   enabled: true                  # requires HF_TOKEN in .env (see .env.example)
   hf_token_env: HF_TOKEN
   model: pyannote/speaker-diarization-3.1

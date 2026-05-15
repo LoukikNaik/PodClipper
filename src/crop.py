@@ -144,7 +144,12 @@ def smart_crop_916(
     cfg: SimpleNamespace,
     debug_out: Optional[Path] = None,
 ) -> Path:
-    """Produce a 9:16 crop of `source_video` following `timeline`.
+    """DEPRECATED — legacy `crop.mode: single` renderer.
+
+    Replaced by `smart_crop_916_stacked` (shot-aware single ↔ dual-panel).
+    Not invoked when `cfg.crop.mode == "auto"` (the default).
+
+    Produce a 9:16 crop of `source_video` following `timeline`.
 
     Returns the final output path (with audio re-muxed from source).
     If `debug_out` is set OR `cfg.crop.debug_overlay` is true, also emits a

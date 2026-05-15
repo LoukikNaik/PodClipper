@@ -106,7 +106,9 @@ def _extract_clip_segment(
 
 
 def _maybe_diarize(segment_path: Path, cfg: SimpleNamespace):
-    """Run speaker diarization on a clip if enabled in config. Returns
+    """DEPRECATED — only called from the legacy `crop.mode: single` branch.
+
+    Run speaker diarization on a clip if enabled in config. Returns
     list[DiarSegment] | None (None on disabled, missing HF token, or any failure)."""
     if not getattr(cfg.diarize, "enabled", False):
         return None
@@ -217,6 +219,9 @@ def run_pipeline(
                         for ps in per_frame_persons
                     ]
                 else:
+                    # DEPRECATED legacy branch: cfg.crop.mode == "single".
+                    # Diarization + single-bbox-per-frame + timeline-driven crop.
+                    # Superseded by the `auto` branch above (May 2026 refactor).
                     per_frame, clip_fps, clip_w, clip_h = detect_humans_per_frame(segment_path, cfg)
                     with ThreadPoolExecutor(max_workers=2) as ex:
                         f_words = ex.submit(transcribe_second_pass_cached, segment_path, words_cache, cfg)

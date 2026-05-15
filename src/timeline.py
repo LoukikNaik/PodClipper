@@ -1,17 +1,14 @@
-"""Stage 5b: Speaker timeline builder.
+"""Timeline builders for the crop stage.
 
-A speaker timeline is `list[TimelineSegment]` where each segment answers:
-  "For this time range, which bbox should the 9:16 crop window target?"
+Two distinct API surfaces live in this module:
 
-MVP path: cluster per-frame bboxes to find one or more persistent positions,
-then return a single-entry timeline pointing at the most-persistent one.
+* `classify_wide_shot_frames` — **active**. Used by the shot-aware crop
+  (`cfg.crop.mode == "auto"`). Pure bbox geometry over a temporal window.
 
-Post-MVP path (already wired through): when `diar_segments` is supplied by
-`diarize.py`, emit one timeline entry per diarization segment with its bbox
-chosen via mouth-motion face linking.
-
-The crop stage is identical for both paths — it consumes the timeline with no
-knowledge of how it was built.
+* `build_speaker_timeline`, `apply_min_dwell`, and all `_cluster_*` /
+  `_multi_shot_timeline` / `_make_*_source` helpers — **DEPRECATED**.
+  These power the legacy `cfg.crop.mode == "single"` path (timeline +
+  diarization + EMA crop). Not invoked in the default `auto` mode.
 """
 
 from __future__ import annotations
@@ -237,7 +234,9 @@ def build_speaker_timeline(
     cfg: SimpleNamespace | None = None,
     video_path: "Optional[object]" = None,
 ) -> Timeline:
-    """Turn per-frame YOLO output (+ optional diarization) into a Timeline.
+    """DEPRECATED — legacy `crop.mode: single` only. See module docstring.
+
+    Turn per-frame YOLO output (+ optional diarization) into a Timeline.
 
     MVP behavior (diar_segments is None, which is the only path enabled today):
       1. If no person was ever detected → single-entry timeline pointing at frame center
@@ -334,7 +333,9 @@ def build_speaker_timeline(
 
 
 def apply_min_dwell(timeline: Timeline, min_dwell_seconds: float) -> Timeline:
-    """Merge or drop segments shorter than `min_dwell_seconds`.
+    """DEPRECATED — legacy `crop.mode: single` only. See module docstring.
+
+    Merge or drop segments shorter than `min_dwell_seconds`.
 
     Short segments get absorbed into whichever neighbor they're more similar to
     (here: just the previous segment). Single-segment timelines pass through.
