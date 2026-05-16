@@ -206,3 +206,85 @@ that's where per-word styling kicks in.
 Likely build these two together — they share the font-loading + per-frame
 PIL composition path. Doing them in the same pass means we only set up
 the `assets/fonts/` directory and the template-config schema once.
+
+## Character-highlight reels (fan-edit mode)
+
+**What:** Different beast from podcast clip extraction. Take N episodes
+of a reality show / multi-episode YouTube series / TikTok creator's back
+catalog, identify each recurring person on screen, and let the user pick
+one ("give me a Hannah appreciation reel") + a style ("baddie", "emo",
+"comedic", "dramatic"). Output is a music-driven highlight reel with
+genre-appropriate cuts, slow-mo on the right beats, viral-song bed,
+and styled captions/effects matching the chosen aesthetic.
+
+This is a wholly new pipeline, not a flag on the existing one. New
+`--mode highlights` if/when we build it.
+
+**Sketch of the pipeline:**
+
+  episode files (N)
+    ↓ ingest      ffprobe per file
+    ↓ face embed  per frame: YOLO person + face crop + embedding
+                  (insightface/arcface or face_recognition lib)
+    ↓ cluster     agglomerative over embeddings → "character" groups
+    ↓ label       user names each cluster, OR vision-LLM labels by
+                  showing it a 3-frame thumbnail per cluster
+    ↓ per-character screen-time index + per-frame "is this character
+       primary subject?" track
+    ↓ moment      vision-LLM scores frame windows for the chosen style
+       scorer    (comedic, emotional, dramatic, attractive). Sort by
+                  score, pick top N moments for the character.
+    ↓ style       apply the style template:
+       template   - music bed (viral song from licensed library)
+                  - slow-mo on beat hits (BPM-detected, ffmpeg setpts)
+                  - color grade preset (warm/cool/saturated/desaturated)
+                  - caption font + animation matching style
+                  - transition style (hard cut / whip pan / fade)
+    ↓ render      ffmpeg concat with per-beat alignment, music ducking
+                  during dialogue, music fade in/out, final encode
+
+**Major technical pieces we'd need:**
+
+| Piece | Likely tool | Notes |
+|---|---|---|
+| Face embedding | `insightface` (arcface) or `face_recognition` | Per-face 512-dim vector; cluster across all episodes |
+| Cross-episode clustering | scikit-learn `AgglomerativeClustering` on cosine distance | Need a sensible distance threshold; same person across lighting/angle changes is the hard case |
+| Character labeling | Vision-capable Claude call per cluster (3-5 representative thumbnails) | Returns a short label like "blonde host" or "guy in red hoodie"; user can rename |
+| Screen-time tracking | YOLO + face-match per frame | Builds `character_id → list[time-window]` index |
+| Moment scoring | Vision-LLM per frame-window | Style-specific prompt: "score this 10s window 1-5 for COMEDY/DRAMA/ATTRACTIVENESS" |
+| Beat detection | `librosa` `onset_detect` | For aligning cuts/slow-mo to music beats |
+| Slow-mo | ffmpeg `setpts=2.0*PTS` (video) + `atempo=0.5` (audio, or mute) | Beat-aware: trigger on detected hits |
+| Music library | CC0/CC-BY licensed tracks under `assets/music/highlights/` keyed by mood | DMCA-safe defaults; users can supply their own |
+| Color grade | ffmpeg `colorchannelmixer` + `eq` + `curves` filters | Preset per style (warm/cool/contrast/saturation) |
+| Transitions | ffmpeg `xfade` filter | Per-style transition vocabulary |
+
+**Open questions to settle before building:**
+
+- **Licensing.** "Viral songs" are almost universally copyrighted; we can
+  ship a small CC library of mood-matched alternatives and let users
+  supply their own audio for personal use. Don't ship anything that
+  invites a DMCA strike on the demo site.
+- **Privacy.** Face recognition on third-party reality TV / creator
+  videos has real consent questions. Need a clear "this is for personal
+  fan edits, not commercial use" disclaimer and probably no public
+  hosting of outputs by default.
+- **Scope.** Reality TV episodes are 30-60 min × N — way more compute
+  than current podcast workflow. Need batching, GPU acceleration for
+  the face-embed step (insightface has CUDA + CoreML backends).
+- **Style templates.** How many do we ship vs let users define? Start
+  with 3-4 named templates ("appreciation", "baddie", "emo", "comedic")
+  + a YAML schema users can extend.
+- **Moment scoring needs vision.** The current pipeline is transcript-
+  only; this feature would need vision-LLM calls. We'd want to send
+  3-5 keyframes per candidate window, not full video. Token-budget the
+  scorer carefully.
+
+**Why this is interesting:** completely different audience (reality-TV
+super-fans, creator-stans) than the podcaster audience the rest of the
+tool targets. Built on top of the same shot-aware crop and subtitle
+plumbing, but driven by entirely different selection + styling logic.
+Likely a separate `src/highlights.py` module + `run_highlights_pipeline`
+in pipeline.py, mirroring the structure of trailer mode.
+
+Multi-month effort. Not blocking. Listed here so the moving pieces are
+captured the moment someone wants to start it.
