@@ -1,23 +1,4 @@
-"""End-to-end pipeline orchestration.
-
-Stages (see plan.md for design rationale):
-  1. Ingest — validate + probe metadata
-  2. Audio   — extract whole-video audio
-  3. Transcribe (first pass) — fast, parallel, for LLM analysis
-  4. Analyze — LLM picks reel-worthy clips
-  5. Per clip:
-     a. Extract segment with ffmpeg (pad buffer)
-     b. Detect persons per frame (YOLO)
-     c. Concurrently: second-pass transcribe (large Whisper)
-                    + optional diarization (stub until post-MVP)
-     d. Build speaker timeline
-     e. Smart 9:16 crop (OpenCV, timeline-driven)
-     f. Burn karaoke subtitles (PIL + OpenCV)
-     g. Save to output_dir
-
-Intermediate artifacts go under cfg.paths.cache_dir/<video_stem>/. When
-use_cache=True (default), existing artifacts are reused — enables resume.
-"""
+"""End-to-end pipeline orchestration for reels and trailer modes."""
 
 from __future__ import annotations
 
@@ -67,8 +48,6 @@ from .types import Clip, Transcript, TranscriptSegment, VideoMeta, Word
 log = logging.getLogger("ave.pipeline")
 
 
-# ---------- helpers ----------
-
 def _slug(text: str, max_len: int = 40) -> str:
     s = re.sub(r"[^\w\s-]", "", text.lower()).strip()
     s = re.sub(r"[\s_-]+", "-", s)
@@ -76,7 +55,6 @@ def _slug(text: str, max_len: int = 40) -> str:
 
 
 def _cache_dir_for(cfg: SimpleNamespace, video_path: Path) -> Path:
-    # Hash absolute path so the same video always maps to the same cache dir.
     h = hashlib.sha1(str(video_path.resolve()).encode()).hexdigest()[:10]
     base = Path(cfg.paths.cache_dir) / f"{video_path.stem}-{h}"
     base.mkdir(parents=True, exist_ok=True)
@@ -117,10 +95,7 @@ def _extract_clip_segment(
 
 
 def _maybe_diarize(segment_path: Path, cfg: SimpleNamespace):
-    """DEPRECATED — only called from the legacy `crop.mode: single` branch.
-
-    Run speaker diarization on a clip if enabled in config. Returns
-    list[DiarSegment] | None (None on disabled, missing HF token, or any failure)."""
+    """DEPRECATED — only called from `crop.mode: single`."""
     if not getattr(cfg.diarize, "enabled", False):
         return None
     try:
@@ -131,21 +106,17 @@ def _maybe_diarize(segment_path: Path, cfg: SimpleNamespace):
     return diarize_clip(segment_path, cfg)
 
 
-# ---------- main entry ----------
-
 def run_pipeline(
     input_path: Path,
     cfg: SimpleNamespace,
     use_cache: bool = True,
 ) -> list[Path]:
-    """Run the full pipeline; return paths of produced reels."""
+    """Run the full reels pipeline; return paths of produced reels."""
     input_path = Path(input_path)
     console = get_console()
 
-    # --- Stage 1: Ingest ---
     meta: VideoMeta = ingest(input_path)
 
-    # --- Stage 2: Audio extract ---
     cache = _cache_dir_for(cfg, input_path)
     audio_wav = cache / "audio.wav"
     extract_audio(
@@ -155,7 +126,6 @@ def run_pipeline(
         overwrite=not use_cache,
     )
 
-    # --- Stage 3: First-pass transcription (cached) ---
     transcript_cache = cache / "first_pass_transcript.json"
     if use_cache and transcript_cache.exists():
         log.info(f"Reusing cached first-pass transcript: {transcript_cache}")
@@ -165,23 +135,18 @@ def run_pipeline(
         transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
         log.info(f"Cached first-pass transcript → {transcript_cache}")
 
-    # Pin second-pass language to the first-pass detection so Whisper doesn't
-    # flip between Hindi/Urdu/etc. across clips (produces unreadable subtitles).
+    # Pin 2nd-pass language to 1st-pass detection so Whisper doesn't flip
+    # mid-episode (Hindi/Urdu/etc. swap produces unreadable subtitles).
     if cfg.transcribe.language is None and transcript.language:
         log.info(f"Pinning transcribe language to first-pass detection: {transcript.language}")
         cfg.transcribe.language = transcript.language
 
-    # --- Stage 4: LLM analysis ---
-    # debug_cache_dir = the per-video cache root; analyze_for_reels writes
-    # per-step JSON snapshots under `<cache>/analyze/` for inspection.
     provider = build_provider(cfg.llm)
     clips = analyze_for_reels(transcript, meta.duration, provider, cfg, debug_cache_dir=cache)
     if not clips:
         log.warning("LLM returned no clips — nothing to produce")
         return []
 
-    # --- Stage 5: Per-clip loop ---
-    # Timestamped output directory so previous runs are preserved.
     from datetime import datetime
     run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir = Path(cfg.paths.output_dir) / run_stamp
@@ -220,27 +185,19 @@ def run_pipeline(
                 crop_mode = getattr(cfg.crop, "mode", "auto")
                 words_cache = clip_cache / "words.json" if use_cache else None
 
-                # Branch on crop mode. "auto" uses the shot-aware stacked
-                # renderer and skips diarization entirely; "single" keeps
-                # the legacy single-crop + timeline + (optional) diarization
-                # path for backward compatibility.
-                per_frame_persons: list[list] = []   # populated only in auto mode
+                per_frame_persons: list[list] = []
 
                 if crop_mode == "auto":
                     per_frame_persons, _per_frame_has_face, clip_fps, clip_w, clip_h = (
                         detect_humans_all_per_frame(segment_path, cfg)
                     )
                     words = transcribe_second_pass_cached(segment_path, words_cache, cfg)
-                    # Derive a single primary per frame for downstream
-                    # evaluation stats (x_centers, person_frames, etc.).
                     per_frame = [
                         max(ps, key=lambda b: b.area) if ps else None
                         for ps in per_frame_persons
                     ]
                 else:
-                    # DEPRECATED legacy branch: cfg.crop.mode == "single".
-                    # Diarization + single-bbox-per-frame + timeline-driven crop.
-                    # Superseded by the `auto` branch above (May 2026 refactor).
+                    # DEPRECATED `crop.mode: single` branch.
                     per_frame, clip_fps, clip_w, clip_h = detect_humans_per_frame(segment_path, cfg)
                     with ThreadPoolExecutor(max_workers=2) as ex:
                         f_words = ex.submit(transcribe_second_pass_cached, segment_path, words_cache, cfg)
@@ -248,11 +205,8 @@ def run_pipeline(
                         words = f_words.result()
                         diar_segments = f_diar.result()
 
-                # LLM cleanup pass — fix English spelling, romanize non-Latin scripts.
-                # Runs serially after second-pass because it consumes the transcribed words.
                 words = cleanup_words(words, provider, cfg)
 
-                # Clip duration from frame count (ffmpeg clip may be slightly longer than requested)
                 clip_duration = len(per_frame) / clip_fps if clip_fps else (clip.duration + 2 * cfg.clip_extract.pad_seconds)
 
                 cropped_path = clip_cache / "cropped.mp4"
@@ -282,11 +236,9 @@ def run_pipeline(
                     timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
                     smart_crop_916(segment_path, timeline, cropped_path, cfg)
 
-                # Subtitles + fading title overlay
                 final_path = output_dir / f"{stem}.mp4"
                 burn_subtitles(cropped_path, words, final_path, cfg, title=clip.title)
 
-                # Persist sidecar describing the clip
                 sidecar_path = output_dir / f"{stem}.txt"
                 sidecar_path.write_text(
                     f"title: {clip.title}\n"
@@ -296,14 +248,13 @@ def run_pipeline(
                     f"hook_score: {clip.hook_score:.2f}\n"
                 )
 
-                # Quality evaluation — technical metrics + LLM-as-judge
                 non_null = sum(1 for b in per_frame if b is not None)
                 x_centers = [b.x_center for b in per_frame if b is not None]
                 scorecard = evaluate_reel(
                     title=clip.title,
                     words=words,
                     clip_duration=clip_duration,
-                    face_hits=non_null,    # approximation; true face_hits logged separately
+                    face_hits=non_null,
                     total_frames=len(per_frame),
                     person_frames=non_null,
                     x_centers=x_centers,
@@ -313,7 +264,6 @@ def run_pipeline(
                 )
                 scorecard.write_to(sidecar_path)
 
-                # Auto-skip low-quality reels if configured
                 eval_cfg = getattr(cfg, "evaluate", None)
                 if (eval_cfg and getattr(eval_cfg, "auto_skip", False)
                         and scorecard.verdict == "skip"):
@@ -326,7 +276,7 @@ def run_pipeline(
                     produced.append(final_path)
                     log.info(f"[{i}/{len(clips)}] Done ({scorecard.verdict}): {final_path}")
 
-            except Exception as exc:  # noqa: BLE001 — per-clip boundary, keep going
+            except Exception as exc:  # noqa: BLE001
                 log.exception(f"[{i}/{len(clips)}] Failed: {clip.title}: {exc}")
 
             progress.advance(task_id)
@@ -336,10 +286,6 @@ def run_pipeline(
         log.info(f"  → {p}")
     return produced
 
-
-# ===================================================================
-# Trailer-mode pipeline (--mode trailer)
-# ===================================================================
 
 def _transcript_to_json(t: Transcript) -> dict:
     return {
@@ -373,32 +319,18 @@ def run_trailer_pipeline(
     cfg: SimpleNamespace,
     use_cache: bool = True,
 ) -> Path | None:
-    """Build one trailer for the input video.
-
-    Stages:
-      1. Probe + audio extract
-      2. First-pass transcribe (cached as full_transcript.json)
-      3. LLM picks 4-5 quotable sentences (cached as quotables.json)
-      4. LLM refines each pick's cut bounds (cached as refined_bounds.json)
-      5. Per pick: ffmpeg cut, second-pass Whisper transcribe the cut,
-         shot-aware crop
-      6. Concat all cropped clips with black + silent gaps between
-      7. Burn karaoke subtitles using trailer-time-remapped second-pass words
-      8. LLM-as-judge trailer evaluation
-      9. Write output + sidecar
-    """
+    """Build one trailer for the input video (4-5 quotable picks stitched
+    with black-frame transitions)."""
     import json
     from datetime import datetime
 
     input_path = Path(input_path)
     console = get_console()
 
-    # --- Stage 1: Ingest ---
     meta: VideoMeta = ingest(input_path)
     log.info(f"Source: {meta.path.name}  {meta.width}x{meta.height} "
              f"{meta.fps:.2f}fps  {meta.duration:.1f}s")
 
-    # --- Stage 2: Audio extract ---
     cache = _cache_dir_for(cfg, input_path)
     trailer_cache = cache / "trailer"
     trailer_cache.mkdir(parents=True, exist_ok=True)
@@ -411,7 +343,6 @@ def run_trailer_pipeline(
         overwrite=not use_cache,
     )
 
-    # --- Stage 3: First-pass transcribe (cached) ---
     transcript_cache = trailer_cache / "full_transcript.json"
     if use_cache and transcript_cache.exists():
         log.info(f"Reusing cached transcript: {transcript_cache}")
@@ -421,12 +352,10 @@ def run_trailer_pipeline(
         transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
         log.info(f"Cached transcript → {transcript_cache}")
 
-    # Pin language so the per-cut second-pass doesn't flip
     if cfg.transcribe.language is None and transcript.language:
         log.info(f"Pinning transcribe language to first-pass detection: {transcript.language}")
         cfg.transcribe.language = transcript.language
 
-    # --- Stage 4: LLM picks (cached) ---
     provider = build_provider(cfg.llm)
     quotables_cache = trailer_cache / "quotables.json"
     if use_cache and quotables_cache.exists():
@@ -442,7 +371,6 @@ def run_trailer_pipeline(
         log.error("LLM returned zero picks — nothing to produce")
         return None
 
-    # --- Stage 5: LLM cut-bounds refinement (cached) ---
     refined_cache = trailer_cache / "refined_bounds.json"
     refined: list[dict] | None = None
     if use_cache and refined_cache.exists():
@@ -485,7 +413,6 @@ def run_trailer_pipeline(
             f"{p['refined_sentence'][:80]}"
         )
 
-    # --- Stage 6: Per-pick cut + second-pass transcribe + shot-aware crop ---
     cropped_clips: list[Path] = []
     pick_words_list: list[list[Word]] = []
 
@@ -508,7 +435,6 @@ def run_trailer_pipeline(
             if not seg_path.exists() or not use_cache:
                 trailer_cut_segment(meta.path, q["cut_start"], q["cut_end"], seg_path, cfg)
 
-            # Sharper subtitles: second-pass transcribe THIS cut (cached).
             seg_words = transcribe_second_pass_cached(
                 seg_path, words_cache if use_cache else None, cfg,
             )
@@ -530,12 +456,10 @@ def run_trailer_pipeline(
             cropped_clips.append(cropped_path)
             progress.advance(task_id)
 
-    # --- Stage 7: Concat with black gaps ---
     stitched = trailer_cache / "stitched.mp4"
     log.info(f"Stitching {len(cropped_clips)} clips with black gaps...")
     concat_with_black_gaps(cropped_clips, stitched, cfg)
 
-    # --- Stage 8: Subtitles (no title overlay in trailer mode) ---
     run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir = Path(cfg.paths.output_dir) / run_stamp
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -545,7 +469,6 @@ def run_trailer_pipeline(
     trailer_words = build_trailer_words(picks, pick_words_list, cfg)
     burn_subtitles(stitched, trailer_words, final_path, cfg, title="")
 
-    # --- Stage 9: Sidecar + LLM-as-judge eval ---
     sidecar_path = output_dir / "trailer.txt"
     lines = [
         f"source: {meta.path.name}",

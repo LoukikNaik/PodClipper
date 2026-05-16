@@ -7,12 +7,10 @@ from pathlib import Path
 from typing import Optional
 
 
-# ---------- Stage 1: Ingest ----------
-
 @dataclass
 class VideoMeta:
     path: Path
-    duration: float         # seconds
+    duration: float
     width: int
     height: int
     fps: float
@@ -20,11 +18,9 @@ class VideoMeta:
     codec: str
 
 
-# ---------- Stage 3: Transcribe ----------
-
 @dataclass
 class Word:
-    start: float            # seconds (clip-relative for second pass, video-relative for first)
+    start: float
     end: float
     text: str
     confidence: float = 1.0
@@ -48,35 +44,31 @@ class Transcript:
         return " ".join(s.text.strip() for s in self.segments)
 
 
-# ---------- Stage 4: Analyze ----------
-
 @dataclass
 class DiarSegment:
-    """One speaker-active window from audio diarization (pyannote.audio)."""
-    start: float                # clip-relative seconds
+    """One speaker-active window from pyannote.audio."""
+    start: float
     end: float
-    speaker_id: str             # pyannote label, e.g. "SPEAKER_00"
+    speaker_id: str
 
 
 @dataclass
 class Clip:
-    start: float            # video-relative seconds
+    start: float
     end: float
     title: str
-    reason: str             # LLM's justification (why this is reel-worthy)
-    hook_score: float = 0.0 # LLM confidence / ranking
+    reason: str
+    hook_score: float = 0.0
 
     @property
     def duration(self) -> float:
         return self.end - self.start
 
 
-# ---------- Stage 5a: Person detection ----------
-
 @dataclass
 class BBox:
-    x: float                # left
-    y: float                # top
+    x: float
+    y: float
     w: float
     h: float
     confidence: float = 1.0
@@ -103,40 +95,29 @@ class BBox:
         return inter / union if union > 0 else 0.0
 
 
-# ---------- Stage 5b: Timeline ----------
-
 @dataclass
 class TimelineSegment:
-    """One slice of a clip pointing at a bbox source for smart cropping.
-
-    `bbox_at(frame_idx)` returns the bbox to center on for that frame,
-    or None if no detection was available (crop falls back to last-known x).
-    """
+    """One slice of a clip pointing at a per-frame bbox source for cropping."""
     start: float
     end: float
-    label: str              # "SPEAKER_00", "PRIMARY", etc. — for debug only
-
-    # frame_idx is clip-relative. Implementations typically close over a
-    # per-frame bbox list filtered to a single persistent position.
-    bbox_at: "callable"     # Callable[[int], Optional[BBox]]
+    label: str
+    bbox_at: "callable"  # Callable[[int], Optional[BBox]]
 
 
 Timeline = list[TimelineSegment]
 
 
-# ---------- Stage 5c: Extracted clip artifacts ----------
-
 @dataclass
 class ClipArtifacts:
-    """Everything produced for a single clip, passed through the per-clip pipeline."""
+    """Everything produced for a single clip in the per-clip pipeline."""
     clip: Clip
-    segment_path: Path                       # raw extracted video
-    per_frame_bboxes: list[Optional[BBox]]   # one entry per frame (None if no person)
+    segment_path: Path
+    per_frame_bboxes: list[Optional[BBox]]
     fps: float
     source_width: int
     source_height: int
-    words: list[Word] = field(default_factory=list)   # from second-pass transcription
-    diar_segments: Optional[list] = None              # post-MVP: pyannote output
+    words: list[Word] = field(default_factory=list)
+    diar_segments: Optional[list] = None
     timeline: Optional[Timeline] = None
     cropped_path: Optional[Path] = None
     final_path: Optional[Path] = None

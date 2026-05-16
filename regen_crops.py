@@ -1,28 +1,8 @@
 #!/usr/bin/env python3
 """Re-render existing cached reels with the latest crop logic.
 
-Skips LLM clip selection, audio extract, and first-pass Whisper. Uses the
-cached `segment.mp4` and `words.json` under each reel cache directory.
-
-Crop mode follows `cfg.crop.mode`:
-  * "auto" (default in current config) → shot-aware path:
-      detect_humans_all_per_frame → classify_wide_shot_frames →
-      smart_crop_916_stacked → burn_subtitles
-  * "single" → legacy single-crop path:
-      detect_humans_per_frame → build_speaker_timeline →
-      smart_crop_916 → burn_subtitles
-  (diarization is never invoked from this script regardless of mode)
-
-If `words.json` is missing it runs Whisper second-pass and caches the
-result so subsequent invocations are instant.
-
 Usage:
     python regen_crops.py CACHE_DIR OUTPUT_DIR [SIDECAR_DIR]
-
-  CACHE_DIR     e.g. .cache/yt_9FtradY1AI4_first20-cd9eb04f85
-  OUTPUT_DIR    a fresh directory to write reels into
-  SIDECAR_DIR   optional — directory containing the original reel_*.txt
-                sidecars; titles are parsed for the title overlay.
 """
 
 import re
@@ -45,7 +25,6 @@ from src.transcribe import transcribe_second_pass_cached
 
 
 def _title_from_sidecar(path: Path) -> str:
-    """Parse `title: ...` out of a reel_*.txt sidecar."""
     if not path.exists():
         return ""
     for line in path.read_text().splitlines():
@@ -78,9 +57,8 @@ def main() -> int:
         log.warning(f"No reel_* dirs found in {cache_dir}")
         return 1
 
-    # If a sidecar dir is provided, restrict to reels whose sidecar exists
-    # there (so this script can target a single previous pipeline run when
-    # the cache holds reels from multiple runs).
+    # When a sidecar dir is given, restrict to reels whose sidecar exists
+    # there (lets us target a single previous run when the cache holds many).
     if sidecar_dir:
         wanted = {p.stem for p in sidecar_dir.glob("reel_*.txt")}
         if wanted:
@@ -115,8 +93,7 @@ def main() -> int:
                 )
                 smart_crop_916_stacked(segment, persons, is_wide, cropped_path, cfg)
             else:
-                # DEPRECATED legacy branch: cfg.crop.mode == "single".
-                # See src/pipeline.py for the same branch in production.
+                # DEPRECATED `crop.mode: single` branch.
                 per_frame, fps, w, h = detect_humans_per_frame(segment, cfg)
                 duration = len(per_frame) / fps if fps else 0.0
                 timeline = build_speaker_timeline(

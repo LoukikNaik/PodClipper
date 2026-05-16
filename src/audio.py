@@ -1,10 +1,4 @@
-"""Stage 2: Audio extraction + chunking.
-
-- `extract_audio(video, out_path, sample_rate)` produces a mono WAV for Whisper.
-- `plan_chunks(duration, chunk_s, overlap_s)` returns [(start, end), ...] time ranges.
-  Actual per-chunk decoding is done lazily inside `transcribe.py` via ffmpeg stdin —
-  we don't write N WAV chunk files to disk.
-"""
+"""Audio extraction + chunk planning."""
 
 from __future__ import annotations
 
@@ -23,8 +17,8 @@ class AudioError(Exception):
 @dataclass(frozen=True)
 class ChunkRange:
     index: int
-    start: float    # seconds
-    end: float      # seconds
+    start: float
+    end: float
 
     @property
     def duration(self) -> float:
@@ -38,11 +32,8 @@ def extract_audio(
     codec: str = "pcm_s16le",
     overwrite: bool = False,
 ) -> Path:
-    """Extract audio from `video_path` into a single WAV file at `out_path`.
-
-    Mono, specified sample rate and codec. If `out_path` exists and overwrite
-    is False, returns the existing path without re-running ffmpeg.
-    """
+    """Extract mono audio from `video_path` to `out_path`. Returns the existing
+    path unchanged when it exists and `overwrite=False`."""
     video_path = Path(video_path)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,8 +45,8 @@ def extract_audio(
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video_path),
-        "-vn",                         # drop video
-        "-ac", "1",                    # mono
+        "-vn",
+        "-ac", "1",
         "-ar", str(sample_rate),
         "-c:a", codec,
         str(out_path),
@@ -79,12 +70,7 @@ def plan_chunks(
     chunk_seconds: float,
     overlap_seconds: float,
 ) -> list[ChunkRange]:
-    """Split a [0, duration] range into overlapping chunks for parallel transcription.
-
-    Each chunk (except possibly the last) has length `chunk_seconds`.
-    Consecutive chunks overlap by `overlap_seconds`. The final chunk is clipped
-    to the total duration. Returns ≥1 chunk always.
-    """
+    """Split [0, duration] into overlapping chunks for parallel transcription."""
     if duration <= 0:
         raise ValueError("duration must be positive")
     if chunk_seconds <= 0:

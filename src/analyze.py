@@ -1,9 +1,5 @@
-"""Stage 4: LLM-driven reel moment detection.
-
-Sends the compact timestamped transcript to an LLM provider, parses the
-returned JSON, validates + clamps the results, and returns a list of Clip
-objects sorted by LLM-reported hook_score.
-"""
+"""LLM-driven reel moment detection: pick clips, snap to natural pauses,
+refine word-precise bounds, shorten titles."""
 
 from __future__ import annotations
 
@@ -37,21 +33,17 @@ def _load_prompt(min_s: int, max_s: int, target: int) -> str:
 
 
 def _extract_json_array(text: str) -> list:
-    """Pull a JSON array out of LLM output. Tolerant of code fences or prose."""
+    """Pull a JSON array out of LLM output. Tolerates code fences and trailing prose."""
     text = text.strip()
 
-    # Strip markdown code fence if present
     fence_match = re.search(r"```(?:json)?\s*(.+?)```", text, re.DOTALL)
     if fence_match:
         text = fence_match.group(1).strip()
 
-    # Find the first '[' and incremental-parse from there. raw_decode
-    # stops at the end of the first valid JSON value and ignores any
-    # trailing content (prose, second array, sentinel text, etc.) —
-    # tolerant of LLMs that append commentary after the JSON.
     first = text.find("[")
     if first == -1:
         raise AnalyzeError(f"no JSON array found in LLM output: {text[:200]!r}")
+    # raw_decode stops at end of first valid value, ignoring trailing content
     try:
         parsed, _end = json.JSONDecoder().raw_decode(text[first:])
     except json.JSONDecodeError as e:
@@ -96,14 +88,9 @@ def _normalize_title(title: str) -> str:
 
 
 def _transcript_excerpt(transcript: Transcript, clip: Clip, max_chars: int = 3000) -> str:
-    """Return the plain-text transcript of the clip's time range.
-
-    Includes segments that overlap [clip.start, clip.end]. Trimmed to
-    `max_chars` so pathologically long clips don't blow up the prompt.
-    """
+    """Return the plain-text transcript of the clip's time range, trimmed."""
     parts: list[str] = []
     for seg in transcript.segments:
-        # Keep any segment with meaningful overlap with the clip
         if seg.end <= clip.start or seg.start >= clip.end:
             continue
         text = seg.text.strip()
@@ -121,10 +108,7 @@ def _rewrite_title_with_llm(
     reason: str,
     provider: LLMProvider,
 ) -> str:
-    """Ask the LLM to produce a short, self-contained title, using the
-    actual clip transcript as grounding. Returns the rewritten title, or
-    the original if the rewrite fails or can't meet the length budget.
-    """
+    """Ask the LLM for a short, self-contained title; returns the original on failure."""
     user_prompt = (
         f"Existing title: {long_title}\n\n"
         f"Clip transcript:\n{transcript_excerpt}\n\n"
@@ -141,7 +125,6 @@ def _rewrite_title_with_llm(
         log.warning(f"title rewrite failed ({e}); keeping original")
         return long_title
 
-    # Take the first non-empty line, strip quotes/bullets the LLM might have added
     candidate = ""
     for line in response.splitlines():
         line = line.strip().lstrip("-*•").strip().strip('"').strip("'")
@@ -161,27 +144,17 @@ def _snap_to_segment_boundaries(
     segments: list[TranscriptSegment],
     tolerance_s: float = 3.0,
 ) -> tuple[float, float]:
-    """Snap (start, end) to the nearest transcript-segment boundaries within tolerance.
-
-    This fixes the common failure mode where the LLM picks a clean start/end
-    but the numeric value lands mid-segment (e.g. rounded to the nearest 5s).
-    By snapping to segment edges, our cuts land at natural speech pauses.
-
-    If no segment boundary is within `tolerance_s` of the request, we leave
-    the original value alone (the LLM may have had a reason).
-    """
+    """Snap (start, end) to the nearest transcript-segment boundaries within tolerance."""
     if not segments:
         return start, end
 
     starts = [s.start for s in segments]
     ends = [s.end for s in segments]
 
-    # Snap start to the nearest segment START (we want to begin at the top of a segment)
     nearest_start = min(starts, key=lambda s: abs(s - start))
     if abs(nearest_start - start) <= tolerance_s:
         start = nearest_start
 
-    # Snap end to the nearest segment END (we want to end on a natural pause)
     nearest_end = min(ends, key=lambda e: abs(e - end))
     if abs(nearest_end - end) <= tolerance_s:
         end = nearest_end
@@ -189,7 +162,6 @@ def _snap_to_segment_boundaries(
     return start, end
 
 
-# ---------- LLM-driven cut-bounds refinement (per clip) ----------
 _REEL_REFINER_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "reel_refiner.txt"
 )
@@ -239,21 +211,8 @@ def refine_clip_bounds_with_llm(
     cfg: SimpleNamespace,
     window_s: float = 10.0,
 ) -> tuple[float, float, dict]:
-    """Per-clip LLM cut-bounds refinement.
-
-    Builds a single contiguous WORD LIST covering the clip plus
-    `window_s` seconds of context on each side. Each word is labeled
-    with its index. The LLM picks first_word_idx and last_word_idx
-    from that list — deterministic, no fuzzy timestamp rounding, no
-    chance of inventing bounds that don't correspond to actual words.
-
-    The label info (which indices are "currently in clip" vs "context
-    before/after") is passed to the LLM so it knows how far it's
-    extending or contracting the bounds.
-
-    Returns (refined_start, refined_end). Falls back to (clip.start,
-    clip.end) on any failure.
-    """
+    """LLM picks word-precise first/last indices over a clip+context word list.
+    Returns (refined_start, refined_end, trace); falls back to original bounds on failure."""
     win_lo = max(0.0, clip.start - window_s)
     win_hi = clip.end + window_s
 
@@ -265,9 +224,6 @@ def refine_clip_bounds_with_llm(
             if win_lo <= w.start <= win_hi:
                 words.append(w)
 
-    # Trace captures everything for debugging — written to disk so we can
-    # see exactly what the refiner saw, what the LLM said, and what the
-    # final picked bounds were per clip.
     trace: dict = {
         "title": clip.title,
         "input_clip": {"start": clip.start, "end": clip.end, "reason": clip.reason},
@@ -283,8 +239,6 @@ def refine_clip_bounds_with_llm(
         trace["outcome"] = "sparse_window_fallback"
         return clip.start, clip.end, trace
 
-    # Find the indices that correspond to the current rough bounds, so the
-    # LLM can see which range of words is "inside" the clip today.
     current_first_idx = min(
         range(len(words)), key=lambda i: abs(words[i].start - clip.start)
     )
@@ -343,9 +297,6 @@ def refine_clip_bounds_with_llm(
         trace["outcome"] = f"out_of_range: [{first_idx}..{last_idx}] of {len(words)}"
         return clip.start, clip.end, trace
 
-    # Take the LLM's pick as-is. Rule-based post-processing was a dead
-    # end — it can't improve on the LLM, only blunt it. If the LLM picks
-    # poorly, fix the prompt, not the output.
     trace["llm_picked_indices"] = {
         "first_idx": first_idx, "last_idx": last_idx,
         "first_word": words[first_idx].text, "last_word": words[last_idx].text,
@@ -359,7 +310,7 @@ def refine_clip_bounds_with_llm(
 
 
 def _coerce_clip(raw: dict, video_duration: float, min_s: float, max_s: float) -> Clip | None:
-    """Validate a single raw clip dict; return Clip or None if invalid/unsalvageable."""
+    """Validate a raw clip dict; return Clip or None if unsalvageable."""
     try:
         start = float(raw["start"])
         end = float(raw["end"])
@@ -367,7 +318,6 @@ def _coerce_clip(raw: dict, video_duration: float, min_s: float, max_s: float) -
         log.warning(f"dropping clip with invalid start/end: {raw!r}")
         return None
 
-    # Clamp to video bounds
     start = max(0.0, min(start, video_duration))
     end = max(0.0, min(end, video_duration))
 
@@ -376,7 +326,6 @@ def _coerce_clip(raw: dict, video_duration: float, min_s: float, max_s: float) -
         return None
 
     duration = end - start
-    # Enforce length bounds loosely — clamp extremes, drop if still wrong
     if duration < min_s * 0.5 or duration > max_s * 1.5:
         log.warning(f"dropping clip with out-of-bounds duration {duration:.1f}s: {raw!r}")
         return None
@@ -393,7 +342,7 @@ def _coerce_clip(raw: dict, video_duration: float, min_s: float, max_s: float) -
 
 
 def _dump_debug(cache_dir, name: str, payload) -> None:
-    """Write a debug JSON to cache_dir/analyze/. No-op if cache_dir is None."""
+    """Write a debug JSON to cache_dir/analyze/; no-op if cache_dir is None."""
     if cache_dir is None:
         return
     out_dir = Path(cache_dir) / "analyze"
@@ -415,12 +364,9 @@ def analyze_for_reels(
     cfg: SimpleNamespace,
     debug_cache_dir: "Path | None" = None,
 ) -> list[Clip]:
-    """Ask the LLM to pick reel-worthy clips from the transcript.
-
-    If `debug_cache_dir` is provided, dumps a snapshot after each pipeline
-    step under `<debug_cache_dir>/analyze/*.json` so the choices made at
-    each stage (raw picks, snap, refine, title rewrite) are inspectable.
-    """
+    """Ask the LLM to pick reel-worthy clips, snap to pauses, refine to word
+    boundaries, then shorten over-long titles. Dumps per-stage JSON under
+    `<debug_cache_dir>/analyze/` when provided."""
     min_s = cfg.analyze.min_clip_seconds
     max_s = cfg.analyze.max_clip_seconds
     target = cfg.analyze.target_clips
@@ -450,7 +396,6 @@ def analyze_for_reels(
     log.debug(f"LLM raw response: {response[:500]}")
 
     raw_clips = _extract_json_array(response)
-    # Debug cache: the raw picks before any snap/refine/sort/cap.
     _dump_debug(debug_cache_dir, "01_raw_picks.json", {
         "llm_raw_response": response,
         "parsed_clips": raw_clips,
@@ -466,7 +411,6 @@ def analyze_for_reels(
         if c is None:
             continue
 
-        # Snap boundaries to the transcript so cuts land on natural pauses.
         new_start, new_end = _snap_to_segment_boundaries(
             c.start, c.end, transcript.segments, tolerance_s=3.0,
         )
@@ -484,7 +428,6 @@ def analyze_for_reels(
             c = Clip(start=new_start, end=new_end, title=c.title, reason=c.reason, hook_score=c.hook_score)
         clips.append(c)
 
-    # Sort by hook_score desc; cap to target if LLM over-delivered
     clips.sort(key=lambda c: c.hook_score, reverse=True)
     if len(clips) > target:
         log.info(f"LLM returned {len(clips)} clips; keeping top {target}")
@@ -495,11 +438,6 @@ def analyze_for_reels(
         "after_cap": [_clip_to_dict(c) for c in clips],
     })
 
-    # Per-clip LLM cut-bounds refinement — fixes the "starts mid-thought"
-    # / "cuts off before payoff" / "includes intro tag" failure modes
-    # that mechanical segment-snap alone produces. Same idea proven out
-    # in trailer mode. Off by default in case someone wants to skip the
-    # extra LLM calls (one per clip).
     refiner_traces: list[dict] = []
     if bool(getattr(cfg.analyze, "refine_bounds", True)):
         window_s = float(getattr(cfg.analyze, "refiner_window_s", 15.0))
@@ -524,9 +462,6 @@ def analyze_for_reels(
         "after_refine": [_clip_to_dict(c) for c in clips],
     })
 
-    # If any titles exceeded the overlay's character budget, ask the LLM to
-    # rewrite them — truncating mid-sentence produces bad standalone titles.
-    # Ground the rewrite in the actual clip transcript, not just the editor note.
     title_rewrites: list[dict] = []
     for i, c in enumerate(clips):
         if len(c.title) > _TITLE_HARD_MAX:

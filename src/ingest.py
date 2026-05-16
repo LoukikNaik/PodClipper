@@ -1,7 +1,4 @@
-"""Stage 1: Ingest — validate an input video and extract basic metadata via ffprobe.
-
-Keeps zero state; returns a `VideoMeta` dataclass consumed by downstream stages.
-"""
+"""Validate the input video and probe basic metadata via ffprobe."""
 
 from __future__ import annotations
 
@@ -16,7 +13,7 @@ log = logging.getLogger("ave.ingest")
 
 
 class IngestError(Exception):
-    """Raised when ffprobe fails or the input is unusable."""
+    pass
 
 
 def _run_ffprobe(path: Path) -> dict:
@@ -46,7 +43,7 @@ def _run_ffprobe(path: Path) -> dict:
 
 
 def _parse_fps(rate: str) -> float:
-    """ffprobe returns fps as 'num/den' (e.g. '30000/1001'). Convert to float."""
+    """ffprobe returns fps as 'num/den' (e.g. '30000/1001'); convert to float."""
     if "/" in rate:
         num, den = rate.split("/", 1)
         den_f = float(den)
@@ -57,11 +54,7 @@ def _parse_fps(rate: str) -> float:
 
 
 def ingest(path: Path) -> VideoMeta:
-    """Validate the input video and return its metadata.
-
-    Raises IngestError if the file is missing, unreadable, or lacks a usable
-    video stream.
-    """
+    """Validate the input video and return its metadata."""
     path = Path(path).resolve()
     if not path.exists():
         raise IngestError(f"input video not found: {path}")
@@ -77,7 +70,6 @@ def ingest(path: Path) -> VideoMeta:
     if video_stream is None:
         raise IngestError(f"no video stream found in {path}")
 
-    # Duration: try stream first, fall back to format
     duration_s = video_stream.get("duration") or probe.get("format", {}).get("duration")
     if duration_s is None:
         raise IngestError(f"could not determine duration of {path}")
@@ -88,7 +80,7 @@ def ingest(path: Path) -> VideoMeta:
     if width <= 0 or height <= 0:
         raise IngestError(f"invalid video dimensions {width}x{height}")
 
-    # Prefer avg_frame_rate (accounts for VFR); fall back to r_frame_rate.
+    # avg_frame_rate accounts for VFR; r_frame_rate is the fallback.
     fps_raw = video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate") or "0/0"
     fps = _parse_fps(fps_raw)
     if fps <= 0:

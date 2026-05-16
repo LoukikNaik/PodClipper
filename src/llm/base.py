@@ -1,9 +1,4 @@
-"""LLM provider abstraction.
-
-A provider exposes a single `complete(user_prompt, system_prompt)` method.
-Everything downstream (analyze.py, future vision-enabled passes) treats
-providers identically — you pick one via config.
-"""
+"""LLM provider protocol — exposes a single `complete(...)` method."""
 
 from __future__ import annotations
 
@@ -11,7 +6,7 @@ from typing import Protocol
 
 
 class LLMError(Exception):
-    """Raised by any provider when a call fails unrecoverably."""
+    pass
 
 
 class LLMProvider(Protocol):
@@ -23,9 +18,5 @@ class LLMProvider(Protocol):
         system_prompt: str = "",
         max_tokens: int = 4096,
     ) -> str:
-        """Send a prompt and return the raw assistant text.
-
-        Callers (e.g. analyze.py) are responsible for parsing structured output
-        out of the response.
-        """
+        """Send a prompt and return the raw assistant text."""
         ...

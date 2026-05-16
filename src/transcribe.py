@@ -1,18 +1,5 @@
-"""Stage 3: Transcription (two-pass strategy).
-
-First pass — `transcribe_first_pass(audio_path, cfg)`:
-  Split whole-video audio into overlapping chunks, transcribe in parallel
-  threads with a shared faster-whisper model (CTranslate2 releases the GIL),
-  merge results via simple timestamp dedup. Coarse accuracy is fine — output
-  feeds the LLM for clip selection.
-
-Second pass — `transcribe_second_pass(clip_audio, cfg)`:
-  Single-shot high-quality transcription of an already-extracted short clip.
-  No chunking, clip-relative timestamps. Output feeds the subtitle burner.
-
-faster-whisper accepts numpy arrays directly, so we load audio once and slice
-in-memory for parallel chunk workers — no per-chunk WAV files on disk.
-"""
+"""Two-pass Whisper transcription (parallel-chunked first pass, single-shot
+high-quality second pass per clip)."""
 
 from __future__ import annotations
 
@@ -32,23 +19,14 @@ from .types import Transcript, TranscriptSegment, Word
 
 log = logging.getLogger("ave.transcribe")
 
-_WHISPER_SAMPLE_RATE = 16000  # faster-whisper's internal sample rate
+_WHISPER_SAMPLE_RATE = 16000
 
-
-# ---------- Model loading ----------
-
-# We lazy-load WhisperModel per (model_size, compute_type, device) key so first-pass
-# and second-pass models coexist without re-loading on every call.
 _model_cache: dict[tuple, object] = {}
 _model_cache_lock = threading.Lock()
 
 
 def _resolve_device(requested: str) -> str:
-    """Map 'auto' to the best available backend for faster-whisper.
-
-    faster-whisper uses CTranslate2 which supports 'cpu' and 'cuda' (no MPS).
-    On Apple Silicon, 'cpu' with int8 quantization is the pragmatic choice.
-    """
+    """faster-whisper uses CTranslate2 (cpu/cuda only — no MPS)."""
     if requested != "auto":
         return requested
     try:
@@ -64,8 +42,7 @@ def _get_model(model_size: str, compute_type: str, device: str):
     from faster_whisper import WhisperModel
     resolved_device = _resolve_device(device)
 
-    # CPU only reliably supports int8/float32 in CTranslate2. If a GPU-flavored
-    # type is requested but we're on CPU, fall back to int8 silently.
+    # CPU only reliably supports int8/float32 in CTranslate2.
     if resolved_device == "cpu" and compute_type in {"int8_float16", "float16"}:
         log.warning(
             f"compute_type={compute_type} requires a GPU; falling back to int8 on CPU."
@@ -84,14 +61,8 @@ def _get_model(model_size: str, compute_type: str, device: str):
         return _model_cache[key]
 
 
-# ---------- Audio decoding ----------
-
 def _decode_audio_to_float32(audio_path: Path) -> np.ndarray:
-    """Decode any audio file to 16kHz mono float32 PCM numpy array via ffmpeg.
-
-    This matches faster-whisper's expected input format. We bypass pydub/librosa
-    to avoid extra deps; ffmpeg is already a hard dependency.
-    """
+    """Decode any audio file to 16kHz mono float32 PCM via ffmpeg."""
     cmd = [
         "ffmpeg", "-nostdin", "-loglevel", "error",
         "-i", str(audio_path),
@@ -105,8 +76,6 @@ def _decode_audio_to_float32(audio_path: Path) -> np.ndarray:
     return pcm.astype(np.float32) / 32768.0
 
 
-# ---------- Core transcription (per chunk) ----------
-
 def _transcribe_array(
     model,
     audio: np.ndarray,
@@ -116,17 +85,14 @@ def _transcribe_array(
     word_timestamps: bool,
     time_offset: float = 0.0,
 ) -> tuple[list[TranscriptSegment], str]:
-    """Run faster-whisper on an in-memory audio array; return segments + detected language.
-
-    Timestamps are shifted by `time_offset` seconds so they're video-relative
-    (for first-pass chunks) or clip-relative (for second-pass, offset=0).
-    """
+    """Run faster-whisper on an in-memory audio array; timestamps shifted by
+    `time_offset` so they're video-relative for chunked first-pass calls."""
     segments_iter, info = model.transcribe(
         audio,
         language=language,
         beam_size=beam_size,
         word_timestamps=word_timestamps,
-        vad_filter=False,  # keep simple; VAD can drop short utterances we want
+        vad_filter=False,
     )
 
     segments: list[TranscriptSegment] = []
@@ -149,26 +115,16 @@ def _transcribe_array(
     return segments, info.language
 
 
-# ---------- First pass (whole video, parallel chunks) ----------
-
 def _merge_segments(
     per_chunk_segments: list[list[TranscriptSegment]],
 ) -> list[TranscriptSegment]:
-    """Merge per-chunk segments into a single timeline, dropping duplicates
-    from overlap regions.
-
-    Rule: a segment from chunk N+1 is dropped if its start is before the last
-    accepted segment's end. Same rule applies to words inside each segment.
-    This is the "simple timestamp dedup" we agreed on for the first pass —
-    accuracy is coarse anyway, and the LLM doesn't care about boundary noise.
-    """
+    """Merge per-chunk segments, dropping duplicates from overlap regions."""
     merged: list[TranscriptSegment] = []
     last_end = -1.0
     for chunk_segs in per_chunk_segments:
         for seg in chunk_segs:
-            if seg.start < last_end - 0.1:  # small tolerance for timestamp jitter
+            if seg.start < last_end - 0.1:
                 continue
-            # Filter out words that fall before last_end
             if seg.words:
                 seg = TranscriptSegment(
                     start=seg.start,
@@ -234,17 +190,12 @@ def transcribe_first_pass(
     return Transcript(language=detected_language or "unknown", segments=merged)
 
 
-# ---------- Second pass (per clip, single shot, high-quality) ----------
-
 def transcribe_second_pass(
     clip_audio_or_video: Path,
     cfg: SimpleNamespace,
 ) -> list[Word]:
-    """Re-transcribe a single extracted clip with a high-quality model.
-
-    Accepts either a video or audio file — ffmpeg decodes whatever's fed in.
-    Returns word-level timestamps, clip-relative (t=0 is clip start).
-    """
+    """High-quality single-shot transcription of an extracted clip; returns
+    word-level timestamps, clip-relative."""
     sp = cfg.transcribe.second_pass
     model = _get_model(sp.model, sp.compute_type, sp.device)
 
@@ -280,10 +231,8 @@ def transcribe_second_pass_cached(
     cache_path: Optional[Path],
     cfg: SimpleNamespace,
 ) -> list[Word]:
-    """Same as `transcribe_second_pass`, but caches the word list to `cache_path`
-    as JSON. If the cache file exists, load and return it instead of re-running
-    Whisper. Pass `cache_path=None` to bypass caching.
-    """
+    """Same as `transcribe_second_pass` but caches to `cache_path` as JSON.
+    Pass cache_path=None to bypass caching."""
     if cache_path is not None and cache_path.exists():
         try:
             data = json.loads(cache_path.read_text())
@@ -304,18 +253,13 @@ def transcribe_second_pass_cached(
     return words
 
 
-# ---------- Formatting helpers for LLM prompt ----------
-
 def transcript_to_timestamped_text(
     transcript: Transcript,
     resolution: str = "seconds",
 ) -> str:
-    """Compact [start-end] text format for LLM consumption.
-
-    Including the end timestamp is important: each line represents one
-    speech segment bounded by natural pauses, so the LLM can use segment
-    ends as candidate clip boundaries and avoid cutting mid-sentence.
-    """
+    """Compact [start-end] text format for LLM consumption. Each line is one
+    speech segment bounded by natural pauses — the LLM can use segment ends
+    as candidate clip boundaries."""
     def _fmt(t: float) -> str:
         if resolution == "seconds":
             return f"{int(t // 60):02d}:{int(t % 60):02d}"

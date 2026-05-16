@@ -1,23 +1,5 @@
-"""Trailer mode — stitch standalone quotable sentences from across an
-episode into one trailer-style reel with black-frame transitions between.
-
-Entry point: `run_trailer_pipeline` in src/pipeline.py drives this module.
-
-Pipeline shape:
-  1. Pick 4-5 quotable sentences from the full transcript (LLM #1)
-  2. Refine each pick's start/end to a natural-thought boundary using
-     word-level transcript context (LLM #2, once per pick)
-  3. ffmpeg-cut each refined window
-  4. Second-pass Whisper transcribe each cut (sharper captions than
-     the first-pass words from the full episode)
-  5. Shot-aware crop each cut independently
-  6. ffmpeg-concat all cropped clips with black + silent gaps between
-  7. Burn subtitles over the concatenated trailer using each clip's
-     second-pass words remapped to trailer-relative timestamps
-
-The `crop.mode = auto` shot-aware renderer is reused unchanged here —
-each picked cut is treated as a tiny independent reel.
-"""
+"""Trailer mode — pick 4-5 quotable sentences from across an episode and
+splice them into one short reel with black-frame transitions."""
 
 from __future__ import annotations
 
@@ -35,15 +17,13 @@ from .types import Transcript, Word
 log = logging.getLogger("ave.trailer")
 
 
-# ---------- Tunables ----------
-# These live in cfg.trailer.* with config defaults. The constants below
-# are just the in-code fallback if a key is missing from the YAML.
-_DEFAULT_GAP_SECONDS = 0.6        # black-frame duration between picks
-_DEFAULT_HEAD_PAD = 0.10          # buffer before first spoken word
-_DEFAULT_TAIL_PAD = 0.10          # buffer after last spoken word
+# Fallback values used only if a key is missing from cfg.trailer.*
+_DEFAULT_GAP_SECONDS = 0.6
+_DEFAULT_HEAD_PAD = 0.10
+_DEFAULT_TAIL_PAD = 0.10
 _DEFAULT_AUDIO_FADE_IN_S = 0.08
 _DEFAULT_AUDIO_FADE_OUT_S = 0.30
-_DEFAULT_REFINER_WINDOW_S = 10.0  # ±seconds of context shown to refiner
+_DEFAULT_REFINER_WINDOW_S = 10.0
 _DEFAULT_SEG_OUT_FPS = 30
 
 
@@ -54,7 +34,6 @@ def _t_get(cfg: SimpleNamespace, key: str, default):
     return getattr(tcfg, key, default)
 
 
-# ---------- Prompt loading ----------
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
@@ -62,9 +41,8 @@ def _load_prompt(name: str) -> str:
     return (_PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
-# ---------- JSON parsing ----------
 def _extract_json_array(raw: str) -> list[dict]:
-    """Tolerant JSON-array extractor — copes with ```json fences + prose."""
+    """Tolerant JSON-array extractor — handles code fences + trailing prose."""
     try:
         v = json.loads(raw)
         if isinstance(v, list):
@@ -91,7 +69,6 @@ def _extract_json_object(raw: str) -> dict:
     return json.loads(m.group(0))
 
 
-# ---------- Pick selection ----------
 def _fmt_transcript_for_llm(transcript: Transcript) -> str:
     lines = []
     for s in transcript.segments:
@@ -128,14 +105,12 @@ def pick_quotables(
             continue
         if e <= s or not txt:
             continue
-        # Drop picks past source end (LLMs sometimes hallucinate
-        # continuation timestamps).
+        # LLMs occasionally hallucinate timestamps past source end
         if e > video_duration:
             log.warning(f"Skipping past-source pick ({s:.1f}-{e:.1f}s): {txt!r}")
             continue
         out.append({"start": s, "end": e, "sentence": txt})
 
-    # Sort + drop overlapping picks
     out.sort(key=lambda x: x["start"])
     deduped: list[dict] = []
     for q in out:
@@ -146,7 +121,6 @@ def pick_quotables(
     return deduped
 
 
-# ---------- Cut-bounds refinement ----------
 _REFINE_USER_TEMPLATE = """\
 Picked sentence:
   "{sentence}"
@@ -190,12 +164,9 @@ def refine_cut_bounds_with_llm(
     provider: LLMProvider,
     cfg: SimpleNamespace,
 ) -> tuple[float, float, str]:
-    """LLM #2 — pick exact first/last word for one sentence's cut.
-
-    Returns (cut_start, cut_end, refined_sentence). Falls back to
-    `derive_cut_bounds` on any failure (parse error, LLM error,
-    inverted range, sparse context).
-    """
+    """LLM #2 — pick exact first/last word for one sentence's cut. Returns
+    (cut_start, cut_end, refined_sentence); falls back to `derive_cut_bounds`
+    on any failure."""
     window_s = _t_get(cfg, "refiner_window_s", _DEFAULT_REFINER_WINDOW_S)
     head_pad = _t_get(cfg, "head_pad", _DEFAULT_HEAD_PAD)
     tail_pad = _t_get(cfg, "tail_pad", _DEFAULT_TAIL_PAD)
@@ -246,7 +217,6 @@ def refine_cut_bounds_with_llm(
         cs, ce = derive_cut_bounds(quotable, transcript, cfg)
         return cs, ce, sentence
 
-    # Snap the LLM's reply to the nearest actual word boundaries.
     first_word = min(win_words, key=lambda w: abs(w.start - new_start))
     last_word = min(win_words, key=lambda w: abs(w.end - new_end))
 
@@ -268,7 +238,6 @@ def refine_cut_bounds_with_llm(
     )
 
 
-# ---------- ffmpeg cut + concat ----------
 def _ffmpeg(args: list[str], desc: str) -> None:
     log.debug(f"ffmpeg: {desc}")
     try:
@@ -311,13 +280,10 @@ def _probe_duration(p: Path) -> float:
 def concat_with_black_gaps(
     clips: list[Path], out: Path, cfg: SimpleNamespace,
 ) -> None:
-    """Concatenate cropped clips with a black + silent gap between each.
-
-    Uses ffmpeg's concat filter (one re-encode pass) so codec params
-    across clips don't have to match exactly. Each clip's audio gets a
-    small fade-in at the start and a longer fade-out at the end so the
-    cut into the next black gap doesn't sound mid-thought.
-    """
+    """Concatenate cropped clips with a black + silent gap between each, using
+    ffmpeg's concat filter (one re-encode pass). Each clip's audio gets a
+    small fade-in + longer fade-out so the cut into the next gap doesn't
+    sound mid-thought."""
     gap_s = _t_get(cfg, "gap_seconds", _DEFAULT_GAP_SECONDS)
     fade_in_s = _t_get(cfg, "audio_fade_in_s", _DEFAULT_AUDIO_FADE_IN_S)
     fade_out_s = _t_get(cfg, "audio_fade_out_s", _DEFAULT_AUDIO_FADE_OUT_S)
@@ -337,7 +303,6 @@ def concat_with_black_gaps(
 
     clip_durations = [_probe_duration(c) for c in clips]
 
-    # Per gap: one lavfi color (video) + one lavfi anullsrc (audio)
     gap_count = max(0, n_clips - 1)
     for _ in range(gap_count):
         inputs += [
@@ -366,7 +331,7 @@ def concat_with_black_gaps(
             a_idx = n_clips + 2 * i + 1
             concat_inputs.append(f"[{v_idx}:v][{a_idx}:a]")
 
-    n_streams = 2 * n_clips - 1  # clips + gaps
+    n_streams = 2 * n_clips - 1
     filter_complex = (
         "".join(filter_parts)
         + "".join(concat_inputs)
@@ -386,22 +351,13 @@ def concat_with_black_gaps(
     ], desc=f"concat {n_clips} clips + {gap_count} gaps")
 
 
-# ---------- Trailer-time word remapping ----------
 def build_trailer_words(
     picks: list[dict],
     pick_second_pass_words: list[list[Word]],
     cfg: SimpleNamespace,
 ) -> list[Word]:
-    """Remap each pick's CLIP-LOCAL second-pass words into trailer time.
-
-    `picks[i]` carries cut_start / cut_end (source-video coords).
-    `pick_second_pass_words[i]` is the list[Word] from running Whisper
-    second-pass on that cut — timestamps already start at 0 relative to
-    the cut's start.
-
-    Returns one flat list of Words with trailer-relative timestamps,
-    accounting for the GAP_SECONDS of black between each pick.
-    """
+    """Remap each pick's clip-local 2nd-pass words into trailer time,
+    accounting for GAP_SECONDS of black between picks."""
     gap_s = _t_get(cfg, "gap_seconds", _DEFAULT_GAP_SECONDS)
 
     out: list[Word] = []
@@ -409,8 +365,6 @@ def build_trailer_words(
     for i, q in enumerate(picks):
         clip_duration = q["cut_end"] - q["cut_start"]
         for w in pick_second_pass_words[i]:
-            # Clip to the clip's actual duration to defend against
-            # tiny float overshoot from Whisper.
             if w.start < 0 or w.start > clip_duration:
                 continue
             out.append(Word(

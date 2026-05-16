@@ -1,25 +1,4 @@
-"""Stage 5a: Person detection.
-
-Runs YOLO v8 nano on (every Nth) frame of an extracted clip and returns a
-per-frame list of `BBox | None`. A simple greedy IoU matcher tracks the
-"primary" subject across frames — when multiple persons are visible, the
-largest bbox on frame 0 is anchored and subsequent frames pick the detection
-with highest IoU against the previous anchor (falling back to largest).
-
-Front-face preference: when face_aware=True, face detection is run on ALL
-candidate persons per frame (not just the YOLO winner). Candidates with a
-visible face (front-facing) are always preferred over back-of-head detections.
-
-For frames we skipped (sample_every_n_frames > 1), we carry the last-known
-bbox forward so the output list is dense with one entry per source frame.
-
-Debug overlay (cfg.detect.debug_overlay=True or --debug-detect):
-  Writes <clip_cache>/debug_detect.mp4 with per-frame annotations:
-    - Green border  = front-facing person (face detected)
-    - Orange border = back-of-head (no face found)
-    - Thick border  = selected primary subject
-    - Cyan rect     = face bbox within primary
-"""
+"""Person detection (YOLOv8 + optional MediaPipe face attribution)."""
 
 from __future__ import annotations
 
@@ -41,8 +20,6 @@ _model_cache: dict[tuple, object] = {}
 _face_detector = None
 _face_detector_lock = threading.Lock()
 
-# MediaPipe short-range face detector — designed for selfie-distance faces
-# (~2m), which fits podcast framing. ~250KB tflite.
 _FACE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_detector/"
     "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
@@ -79,7 +56,6 @@ def _get_yolo(model_path: str, device: str):
 
 
 def _detections_to_bboxes(result, person_class_id: int, conf_threshold: float) -> list[BBox]:
-    """Pull person bboxes out of a single ultralytics Result."""
     bboxes: list[BBox] = []
     if result.boxes is None:
         return bboxes
@@ -111,7 +87,7 @@ def _ensure_face_model(cache_dir: Path) -> Path:
 
 
 def _get_face_detector(cfg: SimpleNamespace):
-    """Load MediaPipe FaceDetector once per process. Returns None if unavailable."""
+    """Load MediaPipe FaceDetector once per process; returns None if unavailable."""
     global _face_detector
     with _face_detector_lock:
         if _face_detector is not None:
@@ -133,10 +109,7 @@ def _get_face_detector(cfg: SimpleNamespace):
 
 
 def _detect_faces_full_frame(frame_bgr, detector) -> list[BBox]:
-    """Run face detection once on the full frame. Returns face bboxes in source
-    pixel coordinates. Used for single-pass attribution to person bboxes —
-    avoids the cross-leakage bug where a neighbor's face falls inside another
-    person's padded crop and is misattributed."""
+    """Run face detection once on the full frame; returns face bboxes in source pixels."""
     import mediapipe as mp
 
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -160,18 +133,9 @@ def _detect_faces_full_frame(frame_bgr, detector) -> list[BBox]:
 
 
 def _face_person_score(face: BBox, person: BBox) -> float:
-    """Score how strongly `face` belongs to `person`.
-
-    Returns 0.0 if any of these strict tests fail:
-      - Face center vertically in the upper 60% of the person bbox
-        (a real face sits on top of a body; a face leaking in from a
-        neighbor often appears at mic/chest height).
-      - Majority of the face's area lies inside the person bbox (≥ 0.5).
-      - Face is wider than ~5% of person width (filters tiny FP detections).
-
-    Otherwise returns the fraction of face area inside the person bbox,
-    so greedy assignment naturally prefers the most-enclosed face.
-    """
+    """How strongly `face` belongs to `person`. 0 if the face is clearly
+    leaking from a neighbor (mic-height vertical, mostly outside the person
+    bbox, or implausibly small)."""
     if person.w <= 0 or person.h <= 0 or face.w <= 0 or face.h <= 0:
         return 0.0
 
@@ -200,18 +164,12 @@ def _attribute_faces_to_persons(
     persons: list[BBox],
     faces: list[BBox],
 ) -> list[Optional[BBox]]:
-    """Greedily assign each face to at most one person.
-
-    Returns `face_for_person[i]` aligned with `persons`. A face is assigned to
-    its highest-scoring person (per `_face_person_score`), and each face/person
-    can only be matched once — so a face that overlaps two person bboxes does
-    NOT get attributed to both.
-    """
+    """Greedily assign each face to at most one person (so a face overlapping
+    two person bboxes doesn't get attributed to both)."""
     out: list[Optional[BBox]] = [None] * len(persons)
     if not persons or not faces:
         return out
 
-    # Build all (face_idx, person_idx, score) triples, sort high → low.
     pairs: list[tuple[int, int, float]] = []
     for fi, face in enumerate(faces):
         for pi, person in enumerate(persons):
@@ -251,13 +209,8 @@ def _run_face_on_all(
     candidates: list[BBox],
     detector,
 ) -> list[tuple[BBox, Optional[BBox]]]:
-    """Detect faces once on the full frame, then attribute each face to at most
-    one person bbox via `_attribute_faces_to_persons`.
-
-    Returns a list of (person_bbox, face_bbox_or_None).
-    A non-None face_bbox means the person is front-facing AND owns that face
-    exclusively — preventing the back-of-head / neighbor-face leakage bug.
-    """
+    """Detect faces full-frame then attribute to persons; returns
+    [(person, face_or_None)]. A non-None face means the person is front-facing."""
     faces = _detect_faces_full_frame(frame_bgr, detector)
     face_per_person = _attribute_faces_to_persons(candidates, faces)
     return list(zip(candidates, face_per_person))
@@ -267,16 +220,12 @@ def _pick_primary_face_aware(
     tagged: list[tuple[BBox, Optional[BBox]]],
     anchor: Optional[BBox],
 ) -> tuple[Optional[BBox], Optional[BBox]]:
-    """Like _pick_primary but excludes back-of-head candidates when a
-    front-facing person is available.
-
-    Returns (person_bbox, face_bbox_or_None).
-    """
+    """Like _pick_primary but prefers front-facing persons over back-of-head."""
     if not tagged:
         return None, None
 
     front = [(p, f) for p, f in tagged if f is not None]
-    pool = front if front else tagged  # fall back to back-facing if all are back
+    pool = front if front else tagged
 
     persons = [p for p, _ in pool]
     primary = _pick_primary(persons, anchor)
@@ -286,7 +235,7 @@ def _pick_primary_face_aware(
     for p, f in pool:
         if p is primary:
             return primary, f
-    return primary, None  # fallback, shouldn't reach
+    return primary, None
 
 
 def _draw_detection_debug(
@@ -297,14 +246,8 @@ def _draw_detection_debug(
     frame_idx: int,
     fps: float,
 ) -> np.ndarray:
-    """Render colored person/face bboxes onto a copy of `frame` for debugging.
-
-    Color convention:
-      - Green border  = front-facing (face detector found a face)
-      - Orange border = back-of-head (no face detected)
-      - Thick (4px)   = selected primary subject
-      - Cyan rect     = face bbox within the primary
-    """
+    """Draw per-person bboxes for `debug_detect.mp4`:
+    green=front-facing, orange=back-of-head, thick=primary, cyan=face."""
     annotated = frame.copy()
 
     def _is_primary(p: BBox) -> bool:
@@ -315,7 +258,7 @@ def _draw_detection_debug(
     for person, face in all_tagged:
         front = face is not None
         is_prim = _is_primary(person)
-        color = (0, 200, 0) if front else (0, 140, 255)  # green vs orange (BGR)
+        color = (0, 200, 0) if front else (0, 140, 255)
         thickness = 4 if is_prim else 2
         x, y = int(person.x), int(person.y)
         w, h = int(person.w), int(person.h)
@@ -324,7 +267,6 @@ def _draw_detection_debug(
         cv2.putText(annotated, label, (x, max(12, y - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
 
-    # Face bbox in cyan for the primary
     if primary_face is not None:
         fx, fy = int(primary_face.x), int(primary_face.y)
         fw, fh = int(primary_face.w), int(primary_face.h)
@@ -332,7 +274,6 @@ def _draw_detection_debug(
         cv2.putText(annotated, "face", (fx, max(12, fy - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 220, 0), 1, cv2.LINE_AA)
 
-    # Timestamp HUD
     t = frame_idx / fps if fps > 0 else 0.0
     cv2.putText(annotated, f"f{frame_idx}  t={t:.2f}s", (10, 28),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
@@ -343,18 +284,8 @@ def detect_humans_per_frame(
     video_path: Path,
     cfg: SimpleNamespace,
 ) -> tuple[list[Optional[BBox]], float, int, int]:
-    """DEPRECATED — legacy `crop.mode: single` only.
-
-    Returns one primary bbox per frame, losing all multi-person info.
-    The active `auto` path uses `detect_humans_all_per_frame` instead.
-
-    Run per-frame person detection across the video.
-
-    Returns:
-        (bboxes, fps, width, height) — `bboxes[i]` is the primary-subject BBox
-        for source frame i (or None if no person was found). Length equals
-        the source frame count.
-    """
+    """DEPRECATED — legacy `crop.mode: single` only. Returns one primary bbox
+    per frame; use `detect_humans_all_per_frame` for the shot-aware path."""
     video_path = Path(video_path)
     det_cfg = cfg.detect
 
@@ -379,7 +310,6 @@ def detect_humans_per_frame(
         + (", debug overlay ON" if debug_overlay else "")
     )
 
-    # Initialise debug video writer if requested.
     debug_writer = None
     if debug_overlay:
         debug_path = video_path.parent / "debug_detect.mp4"
@@ -424,17 +354,13 @@ def detect_humans_per_frame(
                     conf_threshold=det_cfg.confidence,
                 )
                 if face_detector is not None and bboxes:
-                    # Run face detection on ALL candidates so we can prefer
-                    # front-facing persons over back-of-head ones.
                     all_tagged = _run_face_on_all(frame, bboxes, face_detector)
                     primary, face_bbox = _pick_primary_face_aware(all_tagged, anchor)
                 else:
                     primary = _pick_primary(bboxes, anchor)
                     all_tagged = [(p, None) for p in bboxes]
 
-            # Refine: keep the person bbox dimensions but re-anchor its
-            # x-center on the detected face x-center. The body bbox drifts
-            # to hands/gestures; the face doesn't.
+            # Re-anchor x on the face: body bbox drifts to hands/gestures, face doesn't.
             if primary is not None and face_bbox is not None:
                 face_cx = face_bbox.x + face_bbox.w / 2
                 new_x = face_cx - primary.w / 2
@@ -458,7 +384,6 @@ def detect_humans_per_frame(
                 last_bbox = primary
             out.append(primary)
         else:
-            # Skipped frame — carry forward last known detection.
             if debug_writer is not None:
                 annotated = _draw_detection_debug(
                     frame, last_tagged, last_bbox, last_face, frame_idx, fps)
@@ -487,25 +412,9 @@ def detect_humans_all_per_frame(
     video_path: Path,
     cfg: SimpleNamespace,
 ) -> tuple[list[list[BBox]], list[list[bool]], float, int, int]:
-    """Like `detect_humans_per_frame` but returns ALL detected persons per
-    frame (not just the primary), plus a parallel face-attribution flag list.
-
-    Used by the shot-aware stacked crop renderer, which needs to know about
-    multiple people in wide shots and can't make do with the single primary
-    bbox stored by `detect_humans_per_frame`.
-
-    Returns:
-        (per_frame_persons, per_frame_has_face, fps, width, height)
-          - per_frame_persons[i] = list of BBox detected in frame i
-          - per_frame_has_face[i][j] = True iff the jth person in frame i
-            had a face that passed _attribute_faces_to_persons' strict gate
-          - Length always equals the source frame count; entries may be
-            empty lists when no person was detected.
-
-    Always runs detection per frame (no sample_every_n_frames carry-forward)
-    because the stacked path's body-IoU hysteresis needs current detections
-    every frame to decide if the locked crop should hold or update.
-    """
+    """Return ALL persons per frame + per-person face-attribution flags.
+    Used by the shot-aware stacked crop. Runs detection every frame
+    (no sampling) because the body-IoU hysteresis needs current detections."""
     video_path = Path(video_path)
     det_cfg = cfg.detect
 

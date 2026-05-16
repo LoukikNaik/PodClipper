@@ -1,19 +1,4 @@
-"""Reel quality evaluation — technical metrics + LLM-as-judge.
-
-Two layers:
-  1. Technical metrics (free, computed from pipeline data).
-  2. LLM content evaluation (one Claude call per reel via our existing
-     LLM provider abstraction — works with both CLI and API).
-
-The evaluator prompt is deliberately isolated from the selection prompt:
-the judge does NOT know an AI picked the clips. It sees only the title +
-transcript and scores as if encountering the reel on Instagram cold.
-
-Usage:
-    scorecard = evaluate_reel(title, words, clip_duration, ...)
-    scorecard.write_to(sidecar_path)          # append to .txt sidecar
-    if scorecard.verdict == "skip": ...       # auto-skip low-quality
-"""
+"""Reel quality evaluation — technical metrics + LLM-as-judge."""
 
 from __future__ import annotations
 
@@ -30,10 +15,8 @@ from .types import Word
 log = logging.getLogger("ave.evaluate")
 
 
-# ---------- System prompt ----------
-# Kept separate from reel_detector.txt on purpose — the judge must NOT share
-# context with the selector.
-
+# The evaluator prompt must NOT share context with the selector — the judge
+# scores as if encountering the reel cold while scrolling.
 _EVAL_SYSTEM = """You are a social media content evaluator. You will receive the title and transcript of a short-form video clip (Instagram Reel / TikTok / YouTube Short). Evaluate it as if you're seeing it for the first time while scrolling.
 
 For EACH of the 6 criteria below:
@@ -112,16 +95,14 @@ Verdict rules:
 """
 
 
-# ---------- Technical metrics ----------
-
 @dataclass
 class TechMetrics:
-    face_visibility: float      # 0.0–1.0
-    crop_stability: float       # 0.0–1.0 (1 = perfectly stable)
-    speaker_coverage: float     # 0.0–1.0
+    face_visibility: float
+    crop_stability: float
+    speaker_coverage: float
     duration_seconds: float
     words_per_second: float
-    subtitle_coverage: float    # 0.0–1.0
+    subtitle_coverage: float
 
     @property
     def duration_in_sweet_spot(self) -> bool:
@@ -133,7 +114,6 @@ class TechMetrics:
 
     @property
     def score(self) -> float:
-        """Weighted composite technical score, 0.0–1.0."""
         return (
             self.face_visibility * 0.25
             + self.crop_stability * 0.20
@@ -153,13 +133,12 @@ def compute_tech_metrics(
     x_centers: list[float],
     source_width: int,
 ) -> TechMetrics:
-    """Compute objective technical quality metrics from pipeline data."""
+    """Objective technical quality metrics from pipeline data."""
     import numpy as np
 
     face_vis = face_hits / max(1, total_frames)
     speaker_cov = person_frames / max(1, total_frames)
 
-    # Crop stability: 1 - (normalized stddev of x_centers)
     if len(x_centers) >= 2:
         std = float(np.std(x_centers))
         crop_stab = max(0.0, 1.0 - std / max(1.0, source_width * 0.15))
@@ -168,7 +147,6 @@ def compute_tech_metrics(
 
     wps = len(words) / max(0.1, clip_duration)
 
-    # Subtitle coverage: fraction of clip duration covered by word timestamps
     if words:
         word_time = sum(max(0.0, w.end - w.start) for w in words)
         sub_cov = min(1.0, word_time / max(0.1, clip_duration))
@@ -184,8 +162,6 @@ def compute_tech_metrics(
         subtitle_coverage=sub_cov,
     )
 
-
-# ---------- LLM content evaluation ----------
 
 @dataclass
 class ContentScores:
@@ -207,7 +183,6 @@ class ContentScores:
 
     @property
     def score(self) -> float:
-        """Average of all 6 dimensions, 0.0–5.0."""
         dims = [self.hook, self.arc, self.ending, self.standalone, self.shareability, self.title_match]
         return sum(dims) / max(1, len(dims))
 
@@ -232,16 +207,8 @@ def evaluate_content(
     provider: LLMProvider,
     cfg: SimpleNamespace,
 ) -> ContentScores:
-    """Send title + transcript to LLM for content evaluation.
-
-    Uses the same LLM provider as the rest of the pipeline (Claude CLI or
-    Anthropic API). The evaluator prompt is isolated from the selection
-    prompt to avoid self-confirmation bias.
-
-    Returns ContentScores with per-dimension scores + verdict. On any
-    failure, returns a default "review" verdict so the reel is never
-    silently dropped.
-    """
+    """Send title + transcript to LLM; returns ContentScores. On any failure
+    returns default "review" so the reel is never silently dropped."""
     eval_cfg = getattr(cfg, "evaluate", None)
     if eval_cfg is not None and not bool(getattr(eval_cfg, "enabled", True)):
         return ContentScores(verdict="review", feedback="evaluation disabled")
@@ -308,8 +275,6 @@ def evaluate_content(
     )
 
 
-# ---------- Combined scorecard ----------
-
 @dataclass
 class ReelScorecard:
     tech: TechMetrics
@@ -318,16 +283,14 @@ class ReelScorecard:
     verdict: str = "review"
 
     def __post_init__(self):
-        # 30% technical, 70% content (content is king)
+        # 30% tech, 70% content
         self.final_score = round(
             self.tech.score * 0.3 + (self.content.score / 5.0) * 0.7,
             2,
         )
-        # Verdict is driven by content score (technical rarely disqualifies)
         self.verdict = self.content.verdict
 
     def format(self) -> str:
-        """Human-readable scorecard for the sidecar .txt file."""
         t = self.tech
         c = self.content
         lines = [
@@ -358,14 +321,11 @@ class ReelScorecard:
         return "\n".join(lines)
 
     def write_to(self, path) -> None:
-        """Append the scorecard to an existing sidecar file."""
         from pathlib import Path
         p = Path(path)
         with p.open("a") as f:
             f.write(self.format() + "\n")
 
-
-# ---------- Main entry point ----------
 
 def evaluate_reel(
     title: str,
@@ -395,13 +355,10 @@ def evaluate_reel(
     return scorecard
 
 
-# ---------- Trailer-mode evaluation ----------
-
 @dataclass
 class TrailerScorecard:
-    """Five-axis scorecard for spliced trailers — different rubric than
-    single-clip reels (no hook/arc/ending — those don't apply to a
-    sequence of picks). See prompts/trailer_evaluator.txt for the axes."""
+    """Five-axis scorecard for spliced trailers (no hook/arc/ending — those
+    don't apply to a sequence of picks). See prompts/trailer_evaluator.txt."""
     opener_hook: int = 3
     opener_hook_reasoning: str = ""
     thematic_coherence: int = 3
@@ -444,12 +401,8 @@ def evaluate_trailer(
     provider: LLMProvider,
     cfg: SimpleNamespace,
 ) -> TrailerScorecard:
-    """LLM-as-judge for trailer mode. Sees the picks (in order, with
-    durations) and the total duration. Returns a TrailerScorecard.
-
-    Each pick dict must have at least: "refined_sentence" or "sentence",
-    "cut_start", "cut_end".
-    """
+    """LLM-as-judge for trailer mode. Each pick dict must have at least
+    "refined_sentence" or "sentence", "cut_start", "cut_end"."""
     from pathlib import Path
     eval_cfg = getattr(cfg, "evaluate", None)
     if eval_cfg is not None and not bool(getattr(eval_cfg, "enabled", True)):

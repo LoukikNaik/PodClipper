@@ -1,22 +1,5 @@
-"""Stage 3b: LLM-based cleanup of second-pass whisper output.
-
-Problems this solves:
-  - Whisper sometimes mis-transcribes English words ("Agentec" → "Agentic",
-    "Karmanyeva" → "Karmanye va"), which burns awkwardly into subtitles.
-  - Non-English speech (Hindi Devanagari, Urdu, Arabic, ...) gets written in
-    its native script — but our target reel audience typically wants Latin
-    characters. We transliterate phonetically so viewers can read along.
-
-Approach: send the full word list of a clip as an indexed JSON array to the
-LLM, ask for the same structure back with corrected/romanized `w` values,
-then align 1:1 with the original `Word` objects to preserve timestamps.
-
-Failure modes:
-  - LLM returns a different word count → we reject and keep originals.
-  - LLM returns malformed JSON → reject, keep originals.
-  - LLM times out → reject, keep originals.
-Either way, karaoke keeps working; worst case subs look the same as before.
-"""
+"""LLM post-pass over second-pass Whisper words: fix mis-spellings and
+transliterate non-Latin scripts to Latin so captions are readable."""
 
 from __future__ import annotations
 
@@ -69,7 +52,6 @@ class CleanupError(Exception):
 
 
 def _extract_json_array(text: str) -> list:
-    """Same tolerant extractor as analyze.py."""
     text = text.strip()
     fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.DOTALL)
     if fence:
@@ -86,19 +68,14 @@ def cleanup_words(
     provider: LLMProvider,
     cfg: SimpleNamespace,
 ) -> list[Word]:
-    """Post-process words: transliterate + fix spelling via LLM.
-
-    Returns a NEW list of Word objects with corrected text but original
-    timestamps. If cleanup fails for any reason, returns `words` unchanged.
-    """
+    """Post-process words: transliterate + fix spelling via LLM. Returns the
+    same list unchanged on any failure (karaoke keeps working)."""
     cleanup_cfg = getattr(cfg.transcribe, "cleanup", None)
     if cleanup_cfg is None or not bool(cleanup_cfg.enabled):
         return words
     if not words:
         return words
 
-    # Build indexed payload; keep tokens in their raw form (with attached
-    # punctuation / leading space as whisper emitted them).
     payload = [{"i": i, "w": w.text} for i, w in enumerate(words)]
     user_prompt = json.dumps(payload, ensure_ascii=False)
 

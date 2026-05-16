@@ -1,4 +1,4 @@
-"""Anthropic API provider — uses the official `anthropic` SDK."""
+"""Anthropic API provider using the official `anthropic` SDK."""
 
 from __future__ import annotations
 
@@ -45,13 +45,12 @@ class AnthropicAPIProvider:
                 system=system_prompt or None,
                 messages=[{"role": "user", "content": user_prompt}],
             )
-        except Exception as e:  # noqa: BLE001 — SDK raises many exception types
+        except Exception as e:  # noqa: BLE001
             raise LLMError(f"anthropic API call failed: {e}") from e
 
         if not message.content:
             raise LLMError("anthropic API returned empty content")
 
-        # Concatenate text blocks (ignores any non-text tool-use blocks)
         parts = [b.text for b in message.content if getattr(b, "type", None) == "text"]
         text = "".join(parts).strip()
         if not text:

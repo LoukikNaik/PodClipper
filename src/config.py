@@ -1,9 +1,4 @@
-"""Config loader. YAML → nested SimpleNamespace with dotted access.
-
-Usage:
-    cfg = load_config("config/default.yaml")
-    cfg.transcribe.first_pass.model  # "base"
-"""
+"""YAML config loader → nested SimpleNamespace with dotted access."""
 
 from __future__ import annotations
 
@@ -30,7 +25,7 @@ def load_config(path: str | Path) -> SimpleNamespace:
 
 
 def ns_to_dict(ns: Any) -> Any:
-    """Inverse of _to_ns — useful for logging/serialization."""
+    """Inverse of `_to_ns` for logging / serialization."""
     if isinstance(ns, SimpleNamespace):
         return {k: ns_to_dict(v) for k, v in vars(ns).items()}
     if isinstance(ns, list):

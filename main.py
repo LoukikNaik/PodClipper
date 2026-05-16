@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Agentic Video Editor — CLI entry point.
-
-Usage:
-    python main.py INPUT_VIDEO [options]
-
-Example:
-    python main.py talk.mp4 --output-dir outputs --language en
-"""
+"""Agentic Video Editor CLI."""
 
 from __future__ import annotations
 
@@ -17,12 +10,8 @@ from pathlib import Path
 
 
 def _load_dotenv(path: Path = Path(".env")) -> None:
-    """Minimal .env loader — populates os.environ from `KEY=value` lines.
-
-    Shell env vars take precedence, so pre-set values are never overwritten.
-    Accepts optional surrounding quotes and `export KEY=value` prefix.
-    Comments (`#`) and blank lines are skipped.
-    """
+    """Minimal .env loader. Shell env vars take precedence; supports `export`
+    prefix and paired quotes."""
     if not path.exists():
         return
     for raw in path.read_text().splitlines():
@@ -36,14 +25,13 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip()
-        # Strip paired quotes
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
             value = value[1:-1]
         if key and key not in os.environ:
             os.environ[key] = value
 
 
-# Load `.env` BEFORE importing anything that reads env vars (e.g. src.llm).
+# Load .env BEFORE importing modules that read env vars (e.g. src.llm).
 _load_dotenv()
 
 from src.config import load_config  # noqa: E402
@@ -116,7 +104,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def apply_cli_overrides(cfg, args) -> None:
-    """Mutate cfg in place with CLI flag overrides."""
     if args.output_dir is not None:
         cfg.paths.output_dir = str(args.output_dir)
     if args.language is not None:
@@ -170,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         log.warning("Interrupted by user.")
         return 130
-    except Exception as exc:  # noqa: BLE001  — top-level boundary
+    except Exception as exc:  # noqa: BLE001
         log.exception(f"Pipeline failed: {exc}")
         return 1
 

@@ -1,7 +1,4 @@
-"""Claude CLI provider — shells out to the `claude` binary.
-
-Uses `claude -p <prompt> --output-format text` and reads stdout.
-"""
+"""Claude CLI provider — shells out to the `claude` binary."""
 
 from __future__ import annotations
 
@@ -32,12 +29,10 @@ class ClaudeCLIProvider:
         self,
         user_prompt: str,
         system_prompt: str = "",
-        max_tokens: int = 4096,   # CLI sets its own limits; kept for interface parity
+        max_tokens: int = 4096,
     ) -> str:
-        del max_tokens  # accepted for Protocol parity; CLI has its own context limits
-        # The CLI interprets stdin as the prompt when -p has no argument.
-        # We combine system_prompt + user_prompt into one input blob — the CLI
-        # doesn't accept a separate --system flag in all versions.
+        del max_tokens  # CLI has its own context limits
+        # The CLI doesn't accept --system across all versions, so combine prompts.
         combined = user_prompt if not system_prompt else f"{system_prompt}\n\n{user_prompt}"
 
         cmd = [self.binary, "-p", "--output-format", "text", *self.extra_args]

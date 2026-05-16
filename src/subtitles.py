@@ -1,19 +1,4 @@
-"""Stage 5d: Subtitle rendering and burn-in.
-
-Renders word-level karaoke subtitles directly onto video frames using OpenCV
-+ Pillow, avoiding any dependency on libass (which is commonly missing from
-homebrew ffmpeg builds on macOS). Two public entry points:
-
-  generate_subtitle_lines(words, cfg) → list[SubLine]
-      Group raw words into reel-sized lines (can be cached/debugged).
-
-  burn_subtitles(video_path, words, out_path, cfg) → Path
-      Decode video frame-by-frame, composite karaoke subtitles, pipe to ffmpeg
-      encoder, mux back the source audio.
-
-Styling knobs come from config.subtitles; fonts are resolved against the
-system (macOS path first, then Pillow default).
-"""
+"""Karaoke subtitle + fading title overlay burner (OpenCV + Pillow)."""
 
 from __future__ import annotations
 
@@ -38,8 +23,6 @@ class SubtitleError(Exception):
     pass
 
 
-# ---------- Line grouping ----------
-
 @dataclass
 class SubLine:
     start: float
@@ -52,10 +35,8 @@ def generate_subtitle_lines(
     cfg: SimpleNamespace,
     max_gap_seconds: float = 0.8,
 ) -> list[SubLine]:
-    """Group word tokens into screen-sized lines.
-
-    Breaks on: (a) max chars reached, (b) sentence-ending punctuation, (c) long pause.
-    """
+    """Group word tokens into screen-sized lines, breaking on max chars,
+    sentence-ending punctuation, or long pauses."""
     max_chars = int(cfg.subtitles.max_chars_per_line)
     SENT_END = {".", "!", "?"}
 
@@ -87,8 +68,6 @@ def generate_subtitle_lines(
     return lines
 
 
-# ---------- ASS color helper ----------
-
 def _parse_ass_color(c: str) -> tuple[int, int, int, int]:
     """Parse an ASS &HAABBGGRR color (or plain hex) into RGBA for Pillow."""
     s = c.strip().lstrip("&").lstrip("H").lstrip("h")
@@ -101,14 +80,11 @@ def _parse_ass_color(c: str) -> tuple[int, int, int, int]:
     b = (val >> 16) & 0xFF
     g = (val >> 8) & 0xFF
     r = val & 0xFF
-    # ASS alpha semantic: 0=opaque, 255=transparent — invert for Pillow
+    # ASS alpha: 0=opaque, 255=transparent — invert for Pillow.
     return (r, g, b, 255 - a)
 
 
-# ---------- Font resolution ----------
-
 _FONT_CANDIDATES = [
-    # Prefer bold/heavy condensed — looks like professional reel overlays
     "/System/Library/Fonts/Supplemental/Impact.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -120,7 +96,6 @@ _FONT_CANDIDATES = [
 
 
 def _load_font(size: int, preferred_name: str = "Arial") -> ImageFont.ImageFont:
-    # Try to respect preferred_name by substring match first
     name_lc = preferred_name.lower()
     ordered = sorted(_FONT_CANDIDATES, key=lambda p: 0 if name_lc in Path(p).stem.lower() else 1)
     for p in ordered:
@@ -132,8 +107,6 @@ def _load_font(size: int, preferred_name: str = "Arial") -> ImageFont.ImageFont:
     log.warning(f"No system TTF found — falling back to PIL default bitmap font (size won't apply)")
     return ImageFont.load_default()
 
-
-# ---------- Frame rendering ----------
 
 def _render_line_onto_frame(
     frame: np.ndarray,
@@ -148,13 +121,11 @@ def _render_line_onto_frame(
 ) -> np.ndarray:
     """Composite one subtitle line onto `frame` with karaoke highlight."""
     h, w = frame.shape[:2]
-    # BGR (OpenCV) → RGB (PIL)
     pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
     overlay = Image.new("RGBA", pil.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Measure line width to center it
-    text_parts: list[tuple[str, bool]] = []  # (word_with_leading_space, is_active)
+    text_parts: list[tuple[str, bool]] = []
     for i, wobj in enumerate(line.words):
         token = wobj.text.strip()
         if not token:
@@ -163,23 +134,19 @@ def _render_line_onto_frame(
         prefix = "" if i == 0 else " "
         text_parts.append((prefix + token, is_active))
 
-    # Total width
     total_width = 0
     for txt, _ in text_parts:
         bbox = draw.textbbox((0, 0), txt, font=font)
         total_width += bbox[2] - bbox[0]
 
-    # Baseline y: lower third of frame, controlled by margin_v
     line_bbox = draw.textbbox((0, 0), "Ag", font=font)
     line_height = line_bbox[3] - line_bbox[1]
     y = h - margin_v - line_height
 
-    # Center horizontally
     x = (w - total_width) // 2
 
     for txt, is_active in text_parts:
         color = highlight_rgba if is_active else primary_rgba
-        # Outline: draw the text multiple times with offset
         for dx in range(-outline_width, outline_width + 1):
             for dy in range(-outline_width, outline_width + 1):
                 if dx == 0 and dy == 0:
@@ -200,10 +167,8 @@ def _active_line(lines: list[SubLine], t: float) -> Optional[SubLine]:
     return None
 
 
-# ---------- Title overlay ----------
-
 def _wrap_title(title: str, max_chars: int) -> list[str]:
-    """Greedy word-wrap the title into lines no longer than `max_chars`."""
+    """Greedy word-wrap into lines no longer than `max_chars`."""
     words = title.split()
     lines: list[str] = []
     cur = ""
@@ -220,13 +185,12 @@ def _wrap_title(title: str, max_chars: int) -> list[str]:
 
 
 def _title_alpha(t: float, duration: float, fade: float) -> float:
-    """Return 0.0-1.0 opacity for the title overlay at time t."""
+    """0.0–1.0 opacity for the title overlay at time t."""
     if t < 0 or t >= duration:
         return 0.0
     fade_start = max(0.0, duration - fade)
     if t <= fade_start:
         return 1.0
-    # Linear fade from fade_start to duration
     return max(0.0, 1.0 - (t - fade_start) / fade)
 
 
@@ -243,13 +207,8 @@ def _render_title_onto_frame(
     cfg: SimpleNamespace,
     frame_size: tuple[int, int],
 ) -> np.ndarray:
-    """Composite a (possibly multi-line) title at the top of the frame.
-
-    Supports two backdrop modes:
-      - gradient (default): dark-to-transparent sweep across the top 35% of
-        the frame, like professional reel edits.
-      - pill: rounded rectangle behind the text (legacy).
-    """
+    """Composite the title at the top of the frame. Supports gradient
+    backdrop (default) or pill backdrop (legacy)."""
     tcfg = cfg.subtitles.title_overlay
     frame_w, frame_h = frame_size
 
@@ -257,7 +216,6 @@ def _render_title_onto_frame(
     overlay = Image.new("RGBA", pil.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Measure each line
     line_heights: list[int] = []
     line_widths: list[int] = []
     for line in title_lines:
@@ -273,19 +231,15 @@ def _render_title_onto_frame(
     y0 = int(tcfg.y_offset)
     x_center = frame_w // 2
 
-    # --- Gradient backdrop (top-of-frame dark sweep) ---
     if bool(getattr(tcfg, "gradient_enabled", False)):
         grad_opacity = float(getattr(tcfg, "gradient_opacity", 0.55)) * alpha
-        # Gradient covers top ~35% of frame, fading from `grad_opacity` black to transparent
         grad_h = int(frame_h * 0.35)
-        # Build gradient alpha channel efficiently via numpy
         alpha_col = np.linspace(grad_opacity * 255, 0, grad_h, dtype=np.uint8)
         grad_arr = np.zeros((grad_h, frame_w, 4), dtype=np.uint8)
-        grad_arr[:, :, 3] = alpha_col[:, np.newaxis]  # broadcast alpha across width
+        grad_arr[:, :, 3] = alpha_col[:, np.newaxis]
         grad = Image.fromarray(grad_arr, "RGBA")
         overlay.paste(grad, (0, 0))
 
-    # --- Pill backdrop (legacy) ---
     elif bool(getattr(tcfg, "pill_enabled", False)):
         pad_x = int(tcfg.pill_padding_x)
         pad_y = int(tcfg.pill_padding_y)
@@ -300,7 +254,6 @@ def _render_title_onto_frame(
             radius=radius, fill=pill_color,
         )
 
-    # --- Text rendering (bold outline + fill) ---
     text_rgba = _apply_alpha(_parse_ass_color(tcfg.color), alpha)
     outline_rgba = _apply_alpha(_parse_ass_color(tcfg.outline_color), alpha)
     outline_w = int(tcfg.outline_width)
@@ -308,7 +261,6 @@ def _render_title_onto_frame(
     y = y0
     for line, lw, lh in zip(title_lines, line_widths, line_heights):
         x = x_center - lw // 2
-        # Thick outline via stroke_width (if Pillow supports it; fallback to manual)
         try:
             draw.text(
                 (x, y), line, font=font, fill=text_rgba,
@@ -327,8 +279,6 @@ def _render_title_onto_frame(
     merged = Image.alpha_composite(pil, overlay).convert("RGB")
     return cv2.cvtColor(np.array(merged), cv2.COLOR_RGB2BGR)
 
-
-# ---------- ffmpeg encoder pipe (reused from crop) ----------
 
 def _open_ffmpeg_pipe(
     out_path: Path,
@@ -364,9 +314,9 @@ def _mux_audio(
     audio_fade_out: float = 0.0,
     video_duration: float = 0.0,
 ) -> None:
-    """Mux source-video audio onto the rendered video. Optionally fade audio
-    out over the last `audio_fade_out` seconds (requires `video_duration` so
-    we know where the fade should start)."""
+    """Mux source-video audio onto the rendered video, optionally fading
+    audio out over the last `audio_fade_out` seconds (uses rendered duration,
+    not source, since they may differ slightly)."""
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video_only),
@@ -374,9 +324,6 @@ def _mux_audio(
         "-c:v", "copy",
     ]
     if audio_fade_out > 0 and video_duration > audio_fade_out:
-        # Re-encode audio with afade filter. The fade starts so it ends at
-        # `video_duration`. Using duration from the rendered video, not
-        # source, since they may differ slightly.
         fade_start = max(0.0, video_duration - audio_fade_out)
         cmd += [
             "-c:a", "aac",
@@ -396,8 +343,6 @@ def _mux_audio(
         raise SubtitleError(f"audio mux failed: {e.stderr.strip()[-500:]}") from e
 
 
-# ---------- Main API ----------
-
 def burn_subtitles(
     video_path: Path,
     words: list[Word],
@@ -405,13 +350,7 @@ def burn_subtitles(
     cfg: SimpleNamespace,
     title: str = "",
 ) -> Path:
-    """Render karaoke subtitles + optional fading title overlay onto `video_path`.
-
-    Word timestamps are clip-relative (seconds from video start). If `title`
-    is non-empty and cfg.subtitles.title_overlay.enabled is true, an overlay
-    with the title is drawn at the top of the frame and fades out after
-    `title_overlay.duration_seconds`.
-    """
+    """Render karaoke subtitles + optional fading title overlay onto `video_path`."""
     video_path = Path(video_path)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -444,7 +383,6 @@ def burn_subtitles(
     outline_w = int(cfg.subtitles.outline_width)
     margin_v = int(cfg.subtitles.margin_v)
 
-    # Title overlay setup (only when enabled and a title was given)
     tcfg = cfg.subtitles.title_overlay
     show_title = bool(title) and bool(getattr(tcfg, "enabled", False))
     title_lines: list[str] = []
@@ -466,7 +404,6 @@ def burn_subtitles(
                 break
             t = frame_idx / fps
 
-            # Title overlay first (so subs draw over pill if they ever overlap)
             if show_title:
                 alpha = _title_alpha(t, title_duration, title_fade)
                 if alpha > 0.0 and title_font is not None:
@@ -481,9 +418,7 @@ def burn_subtitles(
                     primary, highlight, outline, outline_w, margin_v,
                 )
 
-            # Video fade-to-black for the trailing window
             if fade_out_start_frame is not None and frame_idx >= fade_out_start_frame:
-                # Linear ramp from 1.0 down to 0.0 across the fade window
                 progress = (frame_idx - fade_out_start_frame) / max(
                     1, total_frames - fade_out_start_frame - 1
                 )

@@ -1,19 +1,4 @@
-"""Stage 5c: Smart 9:16 crop driven by a speaker timeline.
-
-Pipeline:
-  1. Decode source clip frame-by-frame with OpenCV.
-  2. For each frame, look up the active timeline segment and its target bbox.
-  3. Compute target crop-center x, apply EMA smoothing within a segment,
-     reset smoothing on segment boundaries (hard cut).
-  4. Clamp x to stay inside frame, slice, resize to target WxH.
-  5. Pipe raw BGR frames into an ffmpeg encoder subprocess.
-
-Audio is preserved by running a second ffmpeg pass after the video pipe finishes
-(copying audio from the source clip into the cropped video).
-
-Optional debug overlay mode draws bboxes, crop rects, and segment labels on
-an auxiliary video so smoothing parameters can be tuned visually.
-"""
+"""Smart 9:16 crop renderers (legacy single-panel + shot-aware stacked)."""
 
 from __future__ import annotations
 
@@ -40,15 +25,11 @@ class CropError(Exception):
     pass
 
 
-# MediaPipe Pose Landmarker — used by the stacked-crop renderer to find
-# head + shoulder anchors for each visible person, so each panel is tightly
-# framed on a face instead of cropping a full-height slice.
 _POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
     "pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
 )
 
-# MediaPipe Pose Landmarker indices we use (out of 33 keypoints).
 _POSE_NOSE = 0
 _POSE_LEFT_SHOULDER = 11
 _POSE_RIGHT_SHOULDER = 12
@@ -61,14 +42,12 @@ _pose_landmarker_lock = threading.Lock()
 
 @dataclass
 class _FrameContext:
-    """What segment/bbox/x-center applies to one source frame."""
     segment_idx: int
     bbox: Optional[BBox]
     target_x_center: float
 
 
 def _segment_for_time(timeline: Timeline, t: float) -> tuple[int, TimelineSegment]:
-    """Find the timeline segment covering time `t`. Clamps to last on overflow."""
     for i, seg in enumerate(timeline):
         if seg.start <= t < seg.end:
             return i, seg
@@ -80,7 +59,6 @@ def _compute_crop_window(
     source_width: int,
     crop_width: int,
 ) -> tuple[int, int]:
-    """Return (x_start, x_end) for a centered crop window, clamped to frame."""
     x_start = target_x_center - crop_width / 2
     x_start = max(0, min(int(round(x_start)), source_width - crop_width))
     return x_start, x_start + crop_width
@@ -106,7 +84,7 @@ def _open_ffmpeg_pipe(
         "-pix_fmt", "yuv420p",
         "-crf", str(cfg.crop.ffmpeg_crf),
         "-preset", cfg.crop.ffmpeg_preset,
-        "-an",  # no audio in this pass; muxed in later
+        "-an",
         str(out_path),
     ]
     log.debug(f"ffmpeg encoder cmd: {cmd}")
@@ -119,7 +97,6 @@ def _open_ffmpeg_pipe(
 
 
 def _mux_audio(source_video: Path, video_only: Path, final_out: Path) -> None:
-    """Copy the audio track from source into the cropped (video-only) output."""
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video_only),
@@ -127,7 +104,7 @@ def _mux_audio(source_video: Path, video_only: Path, final_out: Path) -> None:
         "-c:v", "copy",
         "-c:a", "aac",
         "-map", "0:v:0",
-        "-map", "1:a:0?",   # optional — don't fail if source has no audio
+        "-map", "1:a:0?",
         "-shortest",
         str(final_out),
     ]
@@ -144,17 +121,8 @@ def smart_crop_916(
     cfg: SimpleNamespace,
     debug_out: Optional[Path] = None,
 ) -> Path:
-    """DEPRECATED — legacy `crop.mode: single` renderer.
-
-    Replaced by `smart_crop_916_stacked` (shot-aware single ↔ dual-panel).
-    Not invoked when `cfg.crop.mode == "auto"` (the default).
-
-    Produce a 9:16 crop of `source_video` following `timeline`.
-
-    Returns the final output path (with audio re-muxed from source).
-    If `debug_out` is set OR `cfg.crop.debug_overlay` is true, also emits a
-    debug video with bbox + crop-rect overlays.
-    """
+    """DEPRECATED — legacy `crop.mode: single` renderer. Replaced by
+    `smart_crop_916_stacked`. Kept for backward compatibility."""
     source_video = Path(source_video)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,18 +140,15 @@ def smart_crop_916(
     src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # Crop window in source pixels — 9:16 aspect based on source height.
     crop_h = src_h
     crop_w = max(1, int(round(crop_h * target_w / target_h)))
     if crop_w > src_w:
-        # Source is already taller than 9:16 — crop_w clamped, use whole width
         crop_w = src_w
     log.info(
         f"Cropping {source_video.name}: {src_w}x{src_h} → {target_w}x{target_h} "
         f"(crop window: {crop_w}x{crop_h}, fps={fps:.2f})"
     )
 
-    # --- Open encoder(s) ---
     tmp_video = Path(tempfile.mkstemp(prefix="ave_crop_", suffix=".mp4")[1])
     encoder = _open_ffmpeg_pipe(tmp_video, target_w, target_h, fps, cfg)
 
@@ -194,7 +159,6 @@ def smart_crop_916(
         debug_tmp = Path(tempfile.mkstemp(prefix="ave_debug_", suffix=".mp4")[1])
         debug_encoder = _open_ffmpeg_pipe(debug_tmp, src_w, src_h, fps, cfg)
 
-    # --- Main frame loop ---
     alpha = float(cfg.crop.smoothing_alpha)
     smoothed_x: Optional[float] = None
     last_segment_idx = -1
@@ -210,10 +174,9 @@ def smart_crop_916(
             t = frame_idx / fps
             seg_idx, seg = _segment_for_time(timeline, t)
 
-            # Hard cut on segment change: reset EMA AND drop the previous
-            # shot's last_known_x, then seed from the new segment's first
-            # available bbox so transition gaps don't strand the crop at the
-            # old shot's x-center (mic / empty wall artifact).
+            # On hard cut: reset EMA + seed last_known_x from the new segment's
+            # first available bbox so the crop doesn't strand at the old shot's
+            # x-center during the bbox-gap (mic / wall artifact).
             if seg_idx != last_segment_idx:
                 smoothed_x = None
                 last_segment_idx = seg_idx
@@ -233,14 +196,13 @@ def smart_crop_916(
             elif last_known_x is not None:
                 target_x = last_known_x
             else:
-                target_x = src_w / 2  # fallback: frame center
+                target_x = src_w / 2
 
             smoothed_x = target_x if smoothed_x is None else (alpha * target_x + (1 - alpha) * smoothed_x)
 
             x_start, x_end = _compute_crop_window(smoothed_x, src_w, crop_w)
             cropped = frame[:, x_start:x_end]
             if cropped.shape[1] != crop_w:
-                # Edge case: source narrower than crop_w, pad with black
                 pad = crop_w - cropped.shape[1]
                 cropped = cv2.copyMakeBorder(cropped, 0, 0, 0, pad, cv2.BORDER_CONSTANT)
 
@@ -254,7 +216,6 @@ def smart_crop_916(
 
             if debug_encoder is not None:
                 dbg = frame.copy()
-                # Draw bbox (yellow)
                 if bbox is not None:
                     cv2.rectangle(
                         dbg,
@@ -262,9 +223,7 @@ def smart_crop_916(
                         (int(bbox.x + bbox.w), int(bbox.y + bbox.h)),
                         (0, 255, 255), 2,
                     )
-                # Draw crop window (green)
                 cv2.rectangle(dbg, (x_start, 0), (x_end, src_h), (0, 255, 0), 3)
-                # Segment label
                 cv2.putText(
                     dbg, f"seg {seg_idx}: {seg.label} t={t:.2f}s",
                     (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2,
@@ -275,7 +234,6 @@ def smart_crop_916(
     finally:
         cap.release()
 
-    # --- Close encoders ---
     encoder.stdin.close()
     ret = encoder.wait(timeout=120)
     if ret != 0:
@@ -288,13 +246,11 @@ def smart_crop_916(
 
     log.info(f"Cropped {frame_idx} frames → muxing audio...")
 
-    # --- Mux audio ---
     try:
         _mux_audio(source_video, tmp_video, out_path)
     finally:
         tmp_video.unlink(missing_ok=True)
 
-    # --- Finalize debug output ---
     if debug_encoder is not None and debug_tmp is not None:
         if debug_out is None:
             debug_out = out_path.with_name(out_path.stem + "_debug.mp4")
@@ -306,13 +262,8 @@ def smart_crop_916(
     return out_path
 
 
-# =====================================================================
-#  Stacked-crop renderer (shot-aware: single panel for close-ups,
-#  stacked dual-panel for wide shots showing two people).
-# =====================================================================
-
 def _ensure_pose_model(cache_dir: Path) -> Path:
-    """Download the MediaPipe Pose Landmarker (lite) on first use; cache it."""
+    """Download MediaPipe Pose Landmarker on first use."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     target = cache_dir / "pose_landmarker_lite.task"
     if not target.exists():
@@ -344,9 +295,8 @@ def _pose_anchors_for_person(
     person_bbox: BBox,
     pose_landmarker,
 ) -> Optional[dict]:
-    """Run Pose Landmarker on a padded crop around `person_bbox` and return
-    source-pixel anchor points {nose, shoulder_mid}, or None if the
-    detection failed or anchors weren't confidently visible."""
+    """Pose Landmarker on a padded person crop; returns source-pixel
+    {nose, shoulder_mid} or None on miss / low visibility."""
     import mediapipe as mp
 
     H, W = frame_bgr.shape[:2]
@@ -395,18 +345,10 @@ def _bbox_from_pose_anchors(
     panel_aspect: float,
     snap_px: int = 8,
 ) -> tuple[int, int, int, int]:
-    """Build a source-pixel (x, y, w, h) crop bbox of aspect `panel_aspect`
-    (w/h, e.g. 9/8 for a stacked half-panel or 9/16 for a full reel) framed
-    around the speaker's head + upper torso.
-
-    Vertical layout:
-        panel_top    = nose_y - 1.5 * head_h     (face sits ~30% from top)
-        panel_bottom = nose_y + 3.5 * head_h     (chest-level framing)
-    where head_h ≈ |shoulder_y - nose_y|.
-
-    Crop dims are snapped to multiples of `snap_px` to suppress sub-pixel
-    drift before IoU comparisons are made against it.
-    """
+    """Build a (x, y, w, h) crop bbox of `panel_aspect` framed around the
+    speaker's head + upper torso. Vertical: top = nose - 1.5·head_h, bottom =
+    nose + 3.5·head_h. Dims snapped to multiples of `snap_px` to suppress
+    sub-pixel drift before IoU comparisons."""
     nose_x, nose_y = anchors["nose"]
     sx, sy = anchors["shoulder_mid"]
     head_h = max(8.0, abs(sy - nose_y))
@@ -429,7 +371,6 @@ def _bbox_from_pose_anchors(
 
 
 def _bbox_iou_tuple(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
-    """IoU on (x, y, w, h) tuples."""
     ax, ay, aw, ah = a
     bx, by, bw, bh = b
     ix0 = max(ax, bx); iy0 = max(ay, by)
@@ -448,7 +389,6 @@ def _bbox_to_tuple(b: BBox) -> tuple[int, int, int, int]:
 def _lerp_bbox(a: tuple[int, int, int, int],
                b: tuple[int, int, int, int],
                t: float) -> tuple[int, int, int, int]:
-    """Linear interpolation between two (x,y,w,h) tuples by t ∈ [0,1]."""
     t = max(0.0, min(1.0, t))
     return tuple(int(round(av + (bv - av) * t)) for av, bv in zip(a, b))
 
@@ -456,13 +396,11 @@ def _lerp_bbox(a: tuple[int, int, int, int],
 def _bbox_within(a: tuple[int, int, int, int],
                  b: tuple[int, int, int, int],
                  tol: int) -> bool:
-    """True iff every axis of `a` is within `tol` of the same axis of `b`."""
     return all(abs(av - bv) <= tol for av, bv in zip(a, b))
 
 
 def _render_from_bbox(frame: np.ndarray, bbox: tuple[int, int, int, int],
                      panel_w: int, panel_h: int) -> np.ndarray:
-    """Slice `frame` at `bbox` and resize to (panel_w, panel_h)."""
     x, y, w, h = bbox
     return cv2.resize(frame[y:y + h, x:x + w], (panel_w, panel_h),
                       interpolation=cv2.INTER_AREA)
@@ -472,9 +410,7 @@ def _fallback_single_panel(
     frame: np.ndarray, cx: float, src_w: int, src_h: int,
     panel_w: int, panel_h: int, panel_aspect: float,
 ) -> np.ndarray:
-    """Centered, full-source-height crop at panel_aspect — used when pose
-    fails or no detection is available. Matches the legacy single-crop
-    behavior so the output stays sensible even in pathological frames."""
+    """Centered, full-height crop at panel_aspect — used when pose fails."""
     crop_h = src_h
     crop_w = max(1, int(round(crop_h * panel_aspect)))
     if crop_w > src_w:
@@ -491,29 +427,10 @@ def smart_crop_916_stacked(
     out_path: Path,
     cfg: SimpleNamespace,
 ) -> Path:
-    """Shot-aware 9:16 renderer.
-
-    For each frame, render either:
-      - single 9:16 crop of the largest face-attributed person (close-up), or
-      - two stacked 9:8 panels (one per visible person) when `is_wide[t]`
-        is True.
-
-    Each panel uses Pose Landmarker for tight head+shoulders framing, with
-    body-bbox IoU hysteresis so the crop only updates when the speaker
-    actually moves. Brief YOLO/Pose dropouts are bridged by a miss
-    tolerance, preventing snap-out / snap-back artifacts.
-
-    Args:
-        source_video: path to the clip whose frames are read.
-        per_frame_persons: aligned with the source clip's frames; each entry
-            is the list of all detected person bboxes for that frame.
-        is_wide: bool array (length must match per_frame_persons) flagging
-            wide-shot frames for stacked layout.
-        out_path: where to write the final reel (.mp4 with audio re-muxed).
-        cfg: pipeline config — reads `cfg.crop.*`, `cfg.paths.cache_dir`.
-
-    Returns the final output path.
-    """
+    """Shot-aware 9:16 renderer: single panel for close-ups, stacked dual
+    panels (9:8 each) for wide shots. Pose-anchored framing with body-bbox
+    IoU hysteresis and lerp transitions so the crop only updates when the
+    speaker actually moves."""
     source_video = Path(source_video)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -522,8 +439,8 @@ def smart_crop_916_stacked(
     target_h = int(cfg.crop.target_height)
     panel_w = target_w
     panel_h = target_h // 2
-    panel_aspect = panel_w / panel_h            # 9:8 stacked panel
-    single_aspect = target_w / target_h         # 9:16 full reel
+    panel_aspect = panel_w / panel_h
+    single_aspect = target_w / target_h
 
     iou_threshold = float(getattr(cfg.crop, "stacked_iou_threshold", 0.70))
     miss_tolerance = int(getattr(cfg.crop, "stacked_miss_tolerance", 15))
@@ -531,7 +448,7 @@ def smart_crop_916_stacked(
     height_cap_frac = float(getattr(cfg.crop, "shot_height_cap_frac", 0.70))
     top_is_right = bool(getattr(cfg.crop, "stacked_top_is_right", False))
     transition_frames = int(getattr(cfg.crop, "stacked_transition_frames", 12))
-    # alpha per-frame so a sustained target change settles in ~transition_frames.
+    # per-frame alpha so a sustained target change settles in ~transition_frames
     transition_alpha = 1.0 / max(1, transition_frames)
 
     cap = cv2.VideoCapture(str(source_video))
@@ -554,13 +471,12 @@ def smart_crop_916_stacked(
     tmp_video = Path(tempfile.mkstemp(prefix="ave_stack_", suffix=".mp4")[1])
     encoder = _open_ffmpeg_pipe(tmp_video, target_w, target_h, fps, cfg)
 
-    # Per-slot lock state. Each holds:
-    #   body:     YOLO body bbox tuple (x,y,w,h) at the moment target was set
+    # Per-slot lock state:
+    #   body:     YOLO body bbox when target was set (the hysteresis signal —
+    #             the small crop bbox would be too sensitive to pose jitter)
     #   target:   destination crop bbox set when body-IoU lock breaks
-    #   rendered: the bbox actually used for output this frame; eases toward
-    #             `target` by `transition_alpha` per frame so each lock-break
-    #             becomes a gentle pan-zoom instead of a 1-frame snap
-    #   miss:     consecutive failure count (YOLO miss or Pose miss)
+    #   rendered: lerps toward `target` by `transition_alpha` per frame
+    #   miss:     consecutive YOLO/Pose failure count
     def _new_slot() -> dict:
         return {"body": None, "target": None, "rendered": None, "miss": 0}
 
@@ -574,13 +490,11 @@ def smart_crop_916_stacked(
         state[slot] = _new_slot()
 
     def _advance_render(s: dict) -> tuple[int, int, int, int]:
-        """Lerp s['rendered'] toward s['target'] by `transition_alpha`; snap
-        to the target once we're within 1 px on every axis (so we eventually
-        settle exactly rather than wobble near the destination forever)."""
         if s["rendered"] is None:
             s["rendered"] = s["target"]
         elif s["target"] is not None and s["rendered"] != s["target"]:
             new_rendered = _lerp_bbox(s["rendered"], s["target"], transition_alpha)
+            # snap to target once within 1px to avoid forever-wobble
             if _bbox_within(new_rendered, s["target"], 1):
                 new_rendered = s["target"]
             s["rendered"] = new_rendered
@@ -588,21 +502,17 @@ def smart_crop_916_stacked(
 
     def _panel_with_pose(slot: str, frame: np.ndarray,
                          person_bbox: Optional[BBox]) -> np.ndarray:
-        """Stacked-panel render for one slot with body-IoU hysteresis and
-        lerp-smoothed transitions when the lock breaks."""
         s = state[slot]
 
         if person_bbox is None:
             s["miss"] += 1
             if s["rendered"] is not None and s["miss"] <= miss_tolerance:
-                # Keep advancing toward target during brief YOLO dropouts.
                 return _render_from_bbox(frame, _advance_render(s),
                                          panel_w, panel_h)
             return _fallback_single_panel(frame, src_w / 2, src_w, src_h,
                                           panel_w, panel_h, panel_aspect)
 
         cur_body = _bbox_to_tuple(person_bbox)
-        # Body barely moved → keep current target, just advance rendered.
         if (s["body"] is not None and s["target"] is not None
                 and _bbox_iou_tuple(cur_body, s["body"]) >= iou_threshold):
             s["miss"] = 0
@@ -634,14 +544,13 @@ def smart_crop_916_stacked(
             if not ok:
                 break
             if frame_idx >= len(per_frame_persons):
-                # Source has more frames than we got bboxes for — pad with empty.
                 persons: list[BBox] = []
                 wide = False
             else:
                 persons = per_frame_persons[frame_idx]
                 wide = bool(is_wide[frame_idx])
 
-            # Layout-transition resets so stale locks don't leak across modes.
+            # Reset locks across layout transitions
             if prev_is_wide is not None and wide != prev_is_wide:
                 if wide:
                     _reset("top"); _reset("bot")
@@ -664,7 +573,6 @@ def smart_crop_916_stacked(
                 composite = np.vstack([top_panel, bot_panel])
                 composite[panel_h - 1:panel_h + 1, :] = (10, 10, 10)
             else:
-                # Single-shot 9:16 with body-IoU hysteresis + lerp transitions.
                 s = state["single"]
                 chosen: Optional[BBox] = None
                 for p in persons:

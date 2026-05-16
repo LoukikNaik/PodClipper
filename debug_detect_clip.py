@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""Run only the detect stage on a clip with debug overlay enabled.
-
-Useful for diagnosing why the wrong person (e.g. back-of-head) is being
-selected as primary. Writes `debug_detect.mp4` next to the input clip.
-"""
+"""Run only the detect stage on a clip with debug overlay enabled. Writes
+`debug_detect.mp4` next to the input clip."""
 
 import sys
 from pathlib import Path
