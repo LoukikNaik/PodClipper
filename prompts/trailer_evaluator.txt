@@ -1,0 +1,55 @@
+You evaluate a finished TRAILER for a podcast episode. A trailer is 4-5
+short quotable sentences from across the episode, spliced back-to-back
+with brief black-frame transitions between them. The goal: would a
+viewer encountering this trailer cold on social media want to watch
+the full episode?
+
+You will receive:
+  - The list of picks, in order, each with its sentence text and
+    duration
+  - Total trailer duration
+
+Score the trailer on FIVE dimensions, each 1-5 with brief reasoning:
+
+  1. opener_hook — Does the FIRST pick grab attention immediately?
+     5 = a stranger stops scrolling in 2 seconds
+     1 = vague, generic, doesn't introduce stakes or curiosity
+
+  2. thematic_coherence — Do the picks feel like ONE narrative?
+     5 = they belong together, build on each other, share a theme
+     1 = random highlights with no through-line
+
+  3. pacing — Does it flow as a trailer, or drag/rush?
+     5 = each pick lands cleanly, momentum is sustained
+     1 = picks are too long/short, repetitive, or feel disconnected
+
+  4. closer_punch — Does the LAST pick leave a memorable impression?
+     5 = the kind of line viewers screenshot and share
+     1 = ends weak, no payoff, fizzles out
+
+  5. standalone_quality — Does EACH pick make sense on its own?
+     5 = every pick is a complete idea a stranger understands cold
+     1 = picks depend on prior context to land
+
+Then give:
+
+  - overall: a single float 1.0-5.0 (weighted avg, opener_hook and
+    closer_punch matter most — these book-end the viewer experience)
+  - verdict: one of "publish" (overall >= 4.0), "review" (3.0-3.9),
+    or "skip" (< 3.0)
+  - one_line_feedback: ONE concrete thing to change (e.g. "Pick 2 and
+    Pick 3 say the same thing — drop one and add a story-based pick
+    for emotional contrast")
+
+Output a single JSON object, no prose around it, no markdown fences.
+Schema:
+{
+  "opener_hook":         {"reasoning": "...", "score": <1-5>},
+  "thematic_coherence":  {"reasoning": "...", "score": <1-5>},
+  "pacing":              {"reasoning": "...", "score": <1-5>},
+  "closer_punch":        {"reasoning": "...", "score": <1-5>},
+  "standalone_quality":  {"reasoning": "...", "score": <1-5>},
+  "overall":             <1.0-5.0>,
+  "verdict":             "publish" | "review" | "skip",
+  "one_line_feedback":   "..."
+}

@@ -393,3 +393,131 @@ def evaluate_reel(
         f"final={scorecard.final_score:.2f}) — {content.feedback}"
     )
     return scorecard
+
+
+# ---------- Trailer-mode evaluation ----------
+
+@dataclass
+class TrailerScorecard:
+    """Five-axis scorecard for spliced trailers — different rubric than
+    single-clip reels (no hook/arc/ending — those don't apply to a
+    sequence of picks). See prompts/trailer_evaluator.txt for the axes."""
+    opener_hook: int = 3
+    opener_hook_reasoning: str = ""
+    thematic_coherence: int = 3
+    thematic_coherence_reasoning: str = ""
+    pacing: int = 3
+    pacing_reasoning: str = ""
+    closer_punch: int = 3
+    closer_punch_reasoning: str = ""
+    standalone_quality: int = 3
+    standalone_quality_reasoning: str = ""
+    overall: float = 3.0
+    verdict: str = "review"
+    feedback: str = ""
+
+    def format(self) -> str:
+        lines = [
+            "",
+            "=== TRAILER SCORECARD ===",
+            "",
+            f"  Opener hook:         {self.opener_hook}/5  \"{self.opener_hook_reasoning[:80]}\"",
+            f"  Thematic coherence:  {self.thematic_coherence}/5  \"{self.thematic_coherence_reasoning[:80]}\"",
+            f"  Pacing:              {self.pacing}/5  \"{self.pacing_reasoning[:80]}\"",
+            f"  Closer punch:        {self.closer_punch}/5  \"{self.closer_punch_reasoning[:80]}\"",
+            f"  Standalone quality:  {self.standalone_quality}/5  \"{self.standalone_quality_reasoning[:80]}\"",
+            "",
+            f"Overall:               {self.overall:.1f}/5  →  {self.verdict.upper()}",
+            f"Feedback:              \"{self.feedback}\"",
+        ]
+        return "\n".join(lines)
+
+    def write_to(self, path) -> None:
+        from pathlib import Path
+        with Path(path).open("a") as f:
+            f.write(self.format() + "\n")
+
+
+def evaluate_trailer(
+    picks: list[dict],
+    total_duration: float,
+    provider: LLMProvider,
+    cfg: SimpleNamespace,
+) -> TrailerScorecard:
+    """LLM-as-judge for trailer mode. Sees the picks (in order, with
+    durations) and the total duration. Returns a TrailerScorecard.
+
+    Each pick dict must have at least: "refined_sentence" or "sentence",
+    "cut_start", "cut_end".
+    """
+    from pathlib import Path
+    eval_cfg = getattr(cfg, "evaluate", None)
+    if eval_cfg is not None and not bool(getattr(eval_cfg, "enabled", True)):
+        return TrailerScorecard(verdict="review", feedback="evaluation disabled")
+
+    system_prompt = (
+        Path(__file__).resolve().parent.parent
+        / "prompts" / "trailer_evaluator.txt"
+    ).read_text(encoding="utf-8")
+
+    picks_payload = []
+    for i, p in enumerate(picks, 1):
+        sentence = p.get("refined_sentence") or p.get("sentence") or ""
+        dur = float(p.get("cut_end", 0)) - float(p.get("cut_start", 0))
+        picks_payload.append({
+            "index": i, "sentence": sentence.strip(), "duration_seconds": round(dur, 2),
+        })
+
+    user_prompt = json.dumps({
+        "picks": picks_payload,
+        "total_duration_seconds": round(total_duration, 2),
+    }, ensure_ascii=False, indent=2)
+
+    try:
+        response = provider.complete(
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            max_tokens=1500,
+        )
+    except LLMError as e:
+        log.warning(f"trailer evaluation LLM call failed ({e}); defaulting to 'review'")
+        return TrailerScorecard(verdict="review", feedback=f"LLM eval failed: {e}")
+
+    try:
+        data = _extract_json_object(response)
+    except (json.JSONDecodeError, ValueError) as e:
+        log.warning(f"trailer eval returned unparseable JSON ({e}); defaulting to 'review'")
+        return TrailerScorecard(verdict="review", feedback=f"parse error: {e}")
+
+    def _dim(key: str) -> tuple[int, str]:
+        entry = data.get(key, {})
+        if isinstance(entry, dict):
+            return int(entry.get("score", 3)), str(entry.get("reasoning", ""))
+        return int(entry) if isinstance(entry, (int, float)) else 3, ""
+
+    o_s, o_r = _dim("opener_hook")
+    tc_s, tc_r = _dim("thematic_coherence")
+    p_s, p_r = _dim("pacing")
+    cp_s, cp_r = _dim("closer_punch")
+    sq_s, sq_r = _dim("standalone_quality")
+
+    overall = float(data.get("overall", 0)) or round(
+        (o_s + tc_s + p_s + cp_s + sq_s) / 5, 1
+    )
+    verdict = str(data.get("verdict", "review"))
+    if verdict not in {"publish", "review", "skip"}:
+        verdict = "publish" if overall >= 4.0 else ("review" if overall >= 3.0 else "skip")
+    feedback = str(data.get("one_line_feedback", ""))
+
+    sc = TrailerScorecard(
+        opener_hook=o_s, opener_hook_reasoning=o_r,
+        thematic_coherence=tc_s, thematic_coherence_reasoning=tc_r,
+        pacing=p_s, pacing_reasoning=p_r,
+        closer_punch=cp_s, closer_punch_reasoning=cp_r,
+        standalone_quality=sq_s, standalone_quality_reasoning=sq_r,
+        overall=overall, verdict=verdict, feedback=feedback,
+    )
+    log.info(
+        f"Trailer eval: {sc.verdict.upper()} (overall={overall}/5) — {feedback}"
+    )
+    return sc
