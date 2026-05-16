@@ -218,3 +218,29 @@ This eliminated three classes of bugs:
 
 The legacy single-crop + timeline path is still present and reachable via
 `cfg.crop.mode = single` for backward compatibility / experiments.
+
+## Comment style (load-bearing — please respect)
+
+Comments in this codebase are kept deliberately minimal. The rule:
+
+- **Each function gets ONE docstring of 1–2 lines max.** State the contract,
+  not the implementation. No multi-paragraph rationale.
+- **No inline comments explaining what the code does.** Well-named identifiers
+  already say what; comments rot, identifiers don't.
+- **No change-log comments.** "Added for X bug", "was 2.0, lowered to 0.15
+  after Huberman test", "May 2026 refactor" — that history belongs in `git
+  log` and PR descriptions, not in source.
+- **Keep comments only when the WHY is non-obvious and load-bearing.**
+  Examples: "ASS alpha: 0=opaque, 255=transparent — invert for Pillow",
+  "CPU only supports int8 in CTranslate2", "raw_decode stops at end of
+  first valid value so trailing prose is tolerated". A future reader
+  would be confused without it.
+- **DEPRECATED markers stay** as 1-line tags on the function/module that
+  also says what replaced it. Don't expand them into rationale.
+- **Module docstrings: one line** that says what the module is for.
+  Pipeline diagrams, stage lists, "Approach:" / "Failure modes:" sections
+  — all belong in CLAUDE.md, not at the top of every file.
+
+When editing existing code, **don't reintroduce explanatory comments.** If
+you're tempted to add one, ask: would removing this confuse a reader who
+already understands the surrounding code? If no → don't add it.
