@@ -58,7 +58,12 @@ analyze:
                                  # the refiner around the clip on each side
 
 clip_extract:
-  pad_seconds: 2.0               # buffer on each side of LLM-chosen clip
+  pad_seconds: 0.15              # tiny buffer on each side of the (refined,
+                                 # word-precise) clip bounds. The LLM refiner
+                                 # already lands on actual word boundaries —
+                                 # anything more than ~0.15s pulls in audio
+                                 # from the neighboring sentence (show intro
+                                 # tags, lead-ins to the next topic, etc.).
   video_codec: libx264
   crf: 18                        # visually lossless-ish for intermediate
   preset: medium
