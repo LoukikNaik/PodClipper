@@ -7,6 +7,22 @@
 
 Repo: `github.com/LoukikNaik/PodClipper` · Live demo: `podclipper.loukik.dev`
 
+## Read this before naming or renaming anything
+
+`docs/ubiquitous-language.md` is the single source of truth for every named
+thing in this repo (entity, state, worker, action, concept). The contract:
+
+1. **Look it up before naming.** About to call something "the scheduled
+   item card"? Check the table first — there may already be a term for it.
+2. **Add before use.** Introducing a new concept? Write the row in the
+   glossary first, then use the name in code.
+3. **Update on rename.** Rename in code → rename in the table in the
+   *same commit*.
+
+If a name isn't in the table and you're tempted to use it, that's a signal
+to add it (or pick an existing term). The glossary is alphabetized, flat,
+one row per name, no sections. Keep it that way.
+
 ## Pipeline (high level)
 
 ```
