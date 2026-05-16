@@ -46,6 +46,16 @@ analyze:
   max_clip_seconds: 90
   target_clips: 8                # hint to the LLM; it may return fewer/more
   transcript_timestamp_resolution: seconds    # "seconds" → [MM:SS] prefixes
+  refine_bounds: true            # after the LLM picks clips and we snap to
+                                 # segment boundaries, do ONE MORE per-clip
+                                 # LLM call to find the exact first/last word
+                                 # that makes the clip play as a complete
+                                 # idea. Eliminates the "starts mid-thought"
+                                 # and "cuts off before the payoff" failures
+                                 # that mechanical segment-snap produces.
+                                 # Adds one extra LLM call per clip (~5-30s).
+  refiner_window_s: 10.0         # ±seconds of word-level context shown to
+                                 # the refiner around the clip on each side
 
 clip_extract:
   pad_seconds: 2.0               # buffer on each side of LLM-chosen clip

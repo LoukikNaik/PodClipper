@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from .llm import LLMError, LLMProvider
 from .transcribe import transcript_to_timestamped_text
-from .types import Clip, Transcript, TranscriptSegment
+from .types import Clip, Transcript, TranscriptSegment, Word
 
 log = logging.getLogger("ave.analyze")
 
@@ -45,17 +45,19 @@ def _extract_json_array(text: str) -> list:
     if fence_match:
         text = fence_match.group(1).strip()
 
-    # Find the first '[' and last ']' and parse that slice — tolerates
-    # leading/trailing prose the LLM might sneak in.
+    # Find the first '[' and incremental-parse from there. raw_decode
+    # stops at the end of the first valid JSON value and ignores any
+    # trailing content (prose, second array, sentinel text, etc.) —
+    # tolerant of LLMs that append commentary after the JSON.
     first = text.find("[")
-    last = text.rfind("]")
-    if first == -1 or last == -1 or last < first:
+    if first == -1:
         raise AnalyzeError(f"no JSON array found in LLM output: {text[:200]!r}")
-    candidate = text[first : last + 1]
     try:
-        parsed = json.loads(candidate)
+        parsed, _end = json.JSONDecoder().raw_decode(text[first:])
     except json.JSONDecodeError as e:
-        raise AnalyzeError(f"could not parse JSON array: {e}; snippet: {candidate[:200]!r}") from e
+        raise AnalyzeError(
+            f"could not parse JSON array: {e}; snippet: {text[first:first+300]!r}"
+        ) from e
     if not isinstance(parsed, list):
         raise AnalyzeError(f"expected JSON array, got {type(parsed).__name__}")
     return parsed
@@ -187,6 +189,175 @@ def _snap_to_segment_boundaries(
     return start, end
 
 
+# ---------- LLM-driven cut-bounds refinement (per clip) ----------
+_REEL_REFINER_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "reel_refiner.txt"
+)
+
+
+def _load_reel_refiner_prompt() -> str:
+    return _REEL_REFINER_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+_REEL_REFINE_USER_TEMPLATE = """\
+Clip title:
+  "{title}"
+
+Why this clip was picked (the upstream selector's note):
+  "{reason}"
+
+Current rough bounds: {current_start:.2f}s to {current_end:.2f}s
+(equivalent to indices [{current_first_idx}..{current_last_idx}] in the word list below).
+
+Word list (every word, with index | start_time-end_time | text).
+  - Indices before [{current_first_idx}] are CONTEXT BEFORE the clip.
+  - Indices [{current_first_idx}..{current_last_idx}] are INSIDE the clip today.
+  - Indices after [{current_last_idx}] are CONTEXT AFTER the clip.
+
+{word_lines}
+"""
+
+
+def _extract_json_object(raw: str) -> dict:
+    """Tolerant JSON-object extractor."""
+    try:
+        v = json.loads(raw)
+        if isinstance(v, dict):
+            return v
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r"\{[^{}]+\}", raw, flags=re.DOTALL)
+    if not m:
+        raise ValueError(f"No JSON object found in LLM output:\n{raw[:300]}...")
+    return json.loads(m.group(0))
+
+
+def refine_clip_bounds_with_llm(
+    clip: Clip,
+    transcript: Transcript,
+    provider: LLMProvider,
+    cfg: SimpleNamespace,
+    window_s: float = 10.0,
+) -> tuple[float, float, dict]:
+    """Per-clip LLM cut-bounds refinement.
+
+    Builds a single contiguous WORD LIST covering the clip plus
+    `window_s` seconds of context on each side. Each word is labeled
+    with its index. The LLM picks first_word_idx and last_word_idx
+    from that list — deterministic, no fuzzy timestamp rounding, no
+    chance of inventing bounds that don't correspond to actual words.
+
+    The label info (which indices are "currently in clip" vs "context
+    before/after") is passed to the LLM so it knows how far it's
+    extending or contracting the bounds.
+
+    Returns (refined_start, refined_end). Falls back to (clip.start,
+    clip.end) on any failure.
+    """
+    win_lo = max(0.0, clip.start - window_s)
+    win_hi = clip.end + window_s
+
+    words: list[Word] = []
+    for seg in transcript.segments:
+        if seg.end < win_lo or seg.start > win_hi:
+            continue
+        for w in seg.words:
+            if win_lo <= w.start <= win_hi:
+                words.append(w)
+
+    # Trace captures everything for debugging — written to disk so we can
+    # see exactly what the refiner saw, what the LLM said, and what the
+    # final picked bounds were per clip.
+    trace: dict = {
+        "title": clip.title,
+        "input_clip": {"start": clip.start, "end": clip.end, "reason": clip.reason},
+        "window": {
+            "win_lo": win_lo, "win_hi": win_hi, "num_words": len(words),
+            "first_word": words[0].text if words else None,
+            "last_word": words[-1].text if words else None,
+        },
+    }
+
+    if len(words) < 8:
+        log.warning(f"Refiner window sparse for {clip.title!r}; keeping bounds")
+        trace["outcome"] = "sparse_window_fallback"
+        return clip.start, clip.end, trace
+
+    # Find the indices that correspond to the current rough bounds, so the
+    # LLM can see which range of words is "inside" the clip today.
+    current_first_idx = min(
+        range(len(words)), key=lambda i: abs(words[i].start - clip.start)
+    )
+    current_last_idx = min(
+        range(len(words)), key=lambda i: abs(words[i].end - clip.end)
+    )
+    trace["current_indices"] = {
+        "first_idx": current_first_idx,
+        "last_idx": current_last_idx,
+        "first_word": words[current_first_idx].text,
+        "last_word": words[current_last_idx].text,
+    }
+
+    word_lines = "\n".join(
+        f"  [{i:4d}] {w.start:7.2f}-{w.end:7.2f}  {w.text}"
+        for i, w in enumerate(words)
+    )
+
+    user_prompt = _REEL_REFINE_USER_TEMPLATE.format(
+        title=clip.title,
+        reason=clip.reason,
+        current_start=clip.start,
+        current_end=clip.end,
+        current_first_idx=current_first_idx,
+        current_last_idx=current_last_idx,
+        word_lines=word_lines,
+    )
+    system_prompt = _load_reel_refiner_prompt()
+    trace["llm_user_prompt"] = user_prompt
+
+    try:
+        raw = provider.complete(
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            max_tokens=200,
+        )
+        trace["llm_raw_response"] = raw
+        log.debug(f"Refiner LLM raw response: {raw[:300]!r}")
+        data = _extract_json_object(raw)
+        first_idx = int(data["first_word_idx"])
+        last_idx = int(data["last_word_idx"])
+        log.info(
+            f"Refiner picked words [{first_idx}..{last_idx}] for {clip.title!r} "
+            f"(was [{current_first_idx}..{current_last_idx}])"
+        )
+    except (LLMError, ValueError, KeyError, json.JSONDecodeError) as e:
+        log.warning(f"Reel refiner failed ({e}); keeping bounds for {clip.title!r}")
+        trace["outcome"] = f"llm_failed: {e}"
+        return clip.start, clip.end, trace
+
+    if not (0 <= first_idx <= last_idx < len(words)):
+        log.warning(
+            f"Reel refiner returned out-of-range indices "
+            f"({first_idx}..{last_idx} of {len(words)}); keeping bounds for {clip.title!r}"
+        )
+        trace["outcome"] = f"out_of_range: [{first_idx}..{last_idx}] of {len(words)}"
+        return clip.start, clip.end, trace
+
+    # Take the LLM's pick as-is. Rule-based post-processing was a dead
+    # end — it can't improve on the LLM, only blunt it. If the LLM picks
+    # poorly, fix the prompt, not the output.
+    trace["llm_picked_indices"] = {
+        "first_idx": first_idx, "last_idx": last_idx,
+        "first_word": words[first_idx].text, "last_word": words[last_idx].text,
+    }
+    trace["outcome"] = "llm_picked"
+    trace["final_bounds"] = {
+        "start": words[first_idx].start, "end": words[last_idx].end,
+    }
+
+    return words[first_idx].start, words[last_idx].end, trace
+
+
 def _coerce_clip(raw: dict, video_duration: float, min_s: float, max_s: float) -> Clip | None:
     """Validate a single raw clip dict; return Clip or None if invalid/unsalvageable."""
     try:
@@ -221,13 +392,35 @@ def _coerce_clip(raw: dict, video_duration: float, min_s: float, max_s: float) -
     )
 
 
+def _dump_debug(cache_dir, name: str, payload) -> None:
+    """Write a debug JSON to cache_dir/analyze/. No-op if cache_dir is None."""
+    if cache_dir is None:
+        return
+    out_dir = Path(cache_dir) / "analyze"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / name).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+
+def _clip_to_dict(c: "Clip") -> dict:
+    return {
+        "start": c.start, "end": c.end, "duration": c.duration,
+        "title": c.title, "reason": c.reason, "hook_score": c.hook_score,
+    }
+
+
 def analyze_for_reels(
     transcript: Transcript,
     video_duration: float,
     provider: LLMProvider,
     cfg: SimpleNamespace,
+    debug_cache_dir: "Path | None" = None,
 ) -> list[Clip]:
-    """Ask the LLM to pick reel-worthy clips from the transcript."""
+    """Ask the LLM to pick reel-worthy clips from the transcript.
+
+    If `debug_cache_dir` is provided, dumps a snapshot after each pipeline
+    step under `<debug_cache_dir>/analyze/*.json` so the choices made at
+    each stage (raw picks, snap, refine, title rewrite) are inspectable.
+    """
     min_s = cfg.analyze.min_clip_seconds
     max_s = cfg.analyze.max_clip_seconds
     target = cfg.analyze.target_clips
@@ -257,7 +450,14 @@ def analyze_for_reels(
     log.debug(f"LLM raw response: {response[:500]}")
 
     raw_clips = _extract_json_array(response)
+    # Debug cache: the raw picks before any snap/refine/sort/cap.
+    _dump_debug(debug_cache_dir, "01_raw_picks.json", {
+        "llm_raw_response": response,
+        "parsed_clips": raw_clips,
+    })
+
     clips: list[Clip] = []
+    snap_log: list[dict] = []
     for raw in raw_clips:
         if not isinstance(raw, dict):
             log.warning(f"dropping non-dict entry: {raw!r}")
@@ -270,6 +470,12 @@ def analyze_for_reels(
         new_start, new_end = _snap_to_segment_boundaries(
             c.start, c.end, transcript.segments, tolerance_s=3.0,
         )
+        snap_log.append({
+            "title": c.title,
+            "before": {"start": c.start, "end": c.end},
+            "after": {"start": new_start, "end": new_end},
+            "changed": (new_start, new_end) != (c.start, c.end),
+        })
         if (new_start, new_end) != (c.start, c.end):
             log.debug(
                 f"Snapped clip boundaries: [{c.start:.2f}, {c.end:.2f}] → "
@@ -284,19 +490,60 @@ def analyze_for_reels(
         log.info(f"LLM returned {len(clips)} clips; keeping top {target}")
         clips = clips[:target]
 
+    _dump_debug(debug_cache_dir, "02_snapped_and_capped.json", {
+        "snap_log": snap_log,
+        "after_cap": [_clip_to_dict(c) for c in clips],
+    })
+
+    # Per-clip LLM cut-bounds refinement — fixes the "starts mid-thought"
+    # / "cuts off before payoff" / "includes intro tag" failure modes
+    # that mechanical segment-snap alone produces. Same idea proven out
+    # in trailer mode. Off by default in case someone wants to skip the
+    # extra LLM calls (one per clip).
+    refiner_traces: list[dict] = []
+    if bool(getattr(cfg.analyze, "refine_bounds", True)):
+        window_s = float(getattr(cfg.analyze, "refiner_window_s", 15.0))
+        log.info(f"Refining cut bounds for {len(clips)} clips via LLM...")
+        for i, c in enumerate(clips):
+            rs, re_, trace = refine_clip_bounds_with_llm(
+                c, transcript, provider, cfg, window_s=window_s,
+            )
+            refiner_traces.append(trace)
+            if (rs, re_) != (c.start, c.end):
+                log.info(
+                    f"Refined [{c.start:.2f}-{c.end:.2f}] → "
+                    f"[{rs:.2f}-{re_:.2f}]  {c.title!r}"
+                )
+                clips[i] = Clip(
+                    start=rs, end=re_,
+                    title=c.title, reason=c.reason, hook_score=c.hook_score,
+                )
+
+    _dump_debug(debug_cache_dir, "03_refined.json", {
+        "traces": refiner_traces,
+        "after_refine": [_clip_to_dict(c) for c in clips],
+    })
+
     # If any titles exceeded the overlay's character budget, ask the LLM to
     # rewrite them — truncating mid-sentence produces bad standalone titles.
     # Ground the rewrite in the actual clip transcript, not just the editor note.
+    title_rewrites: list[dict] = []
     for i, c in enumerate(clips):
         if len(c.title) > _TITLE_HARD_MAX:
             excerpt = _transcript_excerpt(transcript, c)
             short = _rewrite_title_with_llm(c.title, excerpt, c.reason, provider)
+            title_rewrites.append({"from": c.title, "to": short, "from_len": len(c.title), "to_len": len(short)})
             if short != c.title:
                 log.info(f"Rewrote title ({len(c.title)}→{len(short)} chars): {c.title!r} → {short!r}")
                 clips[i] = Clip(
                     start=c.start, end=c.end,
                     title=short, reason=c.reason, hook_score=c.hook_score,
                 )
+
+    _dump_debug(debug_cache_dir, "04_final.json", {
+        "title_rewrites": title_rewrites,
+        "final_clips": [_clip_to_dict(c) for c in clips],
+    })
 
     log.info(f"Analyze complete: {len(clips)} clips selected")
     for i, c in enumerate(clips, 1):

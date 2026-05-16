@@ -22,6 +22,7 @@ use_cache=True (default), existing artifacts are reused — enables resume.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import subprocess
@@ -154,9 +155,15 @@ def run_pipeline(
         overwrite=not use_cache,
     )
 
-    # --- Stage 3: First-pass transcription ---
-    transcript = transcribe_first_pass(audio_wav, meta.duration, cfg)
-    # TODO: could persist transcript JSON here for resume; skipping for MVP
+    # --- Stage 3: First-pass transcription (cached) ---
+    transcript_cache = cache / "first_pass_transcript.json"
+    if use_cache and transcript_cache.exists():
+        log.info(f"Reusing cached first-pass transcript: {transcript_cache}")
+        transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
+    else:
+        transcript = transcribe_first_pass(audio_wav, meta.duration, cfg)
+        transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
+        log.info(f"Cached first-pass transcript → {transcript_cache}")
 
     # Pin second-pass language to the first-pass detection so Whisper doesn't
     # flip between Hindi/Urdu/etc. across clips (produces unreadable subtitles).
@@ -165,8 +172,10 @@ def run_pipeline(
         cfg.transcribe.language = transcript.language
 
     # --- Stage 4: LLM analysis ---
+    # debug_cache_dir = the per-video cache root; analyze_for_reels writes
+    # per-step JSON snapshots under `<cache>/analyze/` for inspection.
     provider = build_provider(cfg.llm)
-    clips = analyze_for_reels(transcript, meta.duration, provider, cfg)
+    clips = analyze_for_reels(transcript, meta.duration, provider, cfg, debug_cache_dir=cache)
     if not clips:
         log.warning("LLM returned no clips — nothing to produce")
         return []
