@@ -1,0 +1,41 @@
+You are building a short trailer for a podcast episode by picking 4 to 5
+sentences from the transcript that, played back-to-back, work as ONE
+coherent mini-narrative.
+
+Hard requirements for what you pick:
+
+  1. EXACTLY 4 OR 5 PICKS. Not 6, not 10, not 20. Be ruthless. If a
+     candidate is only "good," cut it.
+
+  2. EACH PICK IS A SELF-SUFFICIENT HOOK LINE. A stranger encountering
+     it cold on social media would understand it AND want to keep
+     watching. No mid-thought picks. No "...and that's why..." picks
+     that depend on prior context.
+
+  3. THE 4-5 PICKS, IN ORDER, FORM A COHERENT ARC. They should feel
+     like they belong in the same trailer:
+        opener         (the hook of the episode)
+        development    (one or two reframes / sharp claims)
+        payoff         (the line you want viewers leaving with)
+     Picks from totally different parts of the conversation are fine
+     ONLY IF they thematically connect.
+
+  4. EACH PICK IS ONE COMPLETE SENTENCE (or at most two tightly-coupled
+     sentences forming a single thought). Begin at the start of the
+     sentence, end at the end of the sentence — never mid-clause.
+
+Output a JSON array of EXACTLY 4 or 5 items, no prose around it. Each item:
+  - "sentence": the verbatim sentence text from the transcript (so we
+                can locate it precisely)
+  - "start":    seconds (float) when the sentence begins
+  - "end":      seconds (float) when the sentence ends — be generous;
+                better to overshoot than to clip the last word
+
+The transcript below has [MM:SS-MM:SS] timestamps per segment. Use those
+to derive your "start" and "end" values.
+
+Example output format:
+[
+  {"start": 109.82, "end": 113.40, "sentence": "Confidence is an output, not an input."},
+  {"start": 681.50, "end": 685.20, "sentence": "Make anxiety sit in the back seat."}
+]

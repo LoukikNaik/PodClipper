@@ -48,7 +48,7 @@ _load_dotenv()
 
 from src.config import load_config  # noqa: E402
 from src.logging_util import setup_logging  # noqa: E402
-from src.pipeline import run_pipeline  # noqa: E402
+from src.pipeline import run_pipeline, run_trailer_pipeline  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +57,16 @@ def build_parser() -> argparse.ArgumentParser:
         description="Turn a long video into vertical 9:16 reels with smart cropping and subtitles.",
     )
     p.add_argument("input", type=Path, help="Path to input video file")
+    p.add_argument(
+        "--mode", choices=["reels", "trailer"], default="reels",
+        help=(
+            "reels (default): produce N independent 9:16 reels covering "
+            "different topics. "
+            "trailer: produce ONE short trailer that splices 4-5 quotable "
+            "sentences from across the episode together with black-frame "
+            "transitions, like a movie trailer."
+        ),
+    )
     p.add_argument(
         "-c", "--config", type=Path, default=Path("config/default.yaml"),
         help="Path to YAML config (default: config/default.yaml)",
@@ -143,11 +153,20 @@ def main(argv: list[str] | None = None) -> int:
     log.info(f"LLM provider: {cfg.llm.provider}")
 
     try:
-        run_pipeline(
-            input_path=args.input,
-            cfg=cfg,
-            use_cache=not args.no_cache,
-        )
+        if args.mode == "trailer":
+            log.info("Mode: trailer (splice quotable sentences into one reel)")
+            run_trailer_pipeline(
+                input_path=args.input,
+                cfg=cfg,
+                use_cache=not args.no_cache,
+            )
+        else:
+            log.info("Mode: reels (independent 9:16 clips)")
+            run_pipeline(
+                input_path=args.input,
+                cfg=cfg,
+                use_cache=not args.no_cache,
+            )
     except KeyboardInterrupt:
         log.warning("Interrupted by user.")
         return 130

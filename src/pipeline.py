@@ -46,12 +46,22 @@ from .detect import detect_humans_per_frame, detect_humans_all_per_frame
 from .ingest import ingest
 from .llm import build_provider
 from .logging_util import get_console
-from .evaluate import evaluate_reel
+from .evaluate import evaluate_reel, evaluate_trailer
 from .subtitles import burn_subtitles
 from .timeline import apply_min_dwell, build_speaker_timeline, classify_wide_shot_frames
-from .transcribe import transcribe_first_pass, transcribe_second_pass_cached
+from .trailer import (
+    concat_with_black_gaps,
+    build_trailer_words,
+    cut_segment as trailer_cut_segment,
+    pick_quotables,
+    refine_cut_bounds_with_llm,
+)
+from .transcribe import (
+    transcribe_first_pass,
+    transcribe_second_pass_cached,
+)
 from .transcribe_cleanup import cleanup_words
-from .types import Clip, VideoMeta
+from .types import Clip, Transcript, TranscriptSegment, VideoMeta, Word
 
 log = logging.getLogger("ave.pipeline")
 
@@ -316,3 +326,240 @@ def run_pipeline(
     for p in produced:
         log.info(f"  → {p}")
     return produced
+
+
+# ===================================================================
+# Trailer-mode pipeline (--mode trailer)
+# ===================================================================
+
+def _transcript_to_json(t: Transcript) -> dict:
+    return {
+        "language": t.language,
+        "segments": [
+            {
+                "start": s.start, "end": s.end, "text": s.text,
+                "words": [
+                    {"start": w.start, "end": w.end, "text": w.text,
+                     "confidence": w.confidence}
+                    for w in s.words
+                ],
+            }
+            for s in t.segments
+        ],
+    }
+
+
+def _transcript_from_json(d: dict) -> Transcript:
+    segs = []
+    for s in d["segments"]:
+        words = [Word(**w) for w in s.get("words", [])]
+        segs.append(TranscriptSegment(
+            start=s["start"], end=s["end"], text=s["text"], words=words,
+        ))
+    return Transcript(language=d["language"], segments=segs)
+
+
+def run_trailer_pipeline(
+    input_path: Path,
+    cfg: SimpleNamespace,
+    use_cache: bool = True,
+) -> Path | None:
+    """Build one trailer for the input video.
+
+    Stages:
+      1. Probe + audio extract
+      2. First-pass transcribe (cached as full_transcript.json)
+      3. LLM picks 4-5 quotable sentences (cached as quotables.json)
+      4. LLM refines each pick's cut bounds (cached as refined_bounds.json)
+      5. Per pick: ffmpeg cut, second-pass Whisper transcribe the cut,
+         shot-aware crop
+      6. Concat all cropped clips with black + silent gaps between
+      7. Burn karaoke subtitles using trailer-time-remapped second-pass words
+      8. LLM-as-judge trailer evaluation
+      9. Write output + sidecar
+    """
+    import json
+    from datetime import datetime
+
+    input_path = Path(input_path)
+    console = get_console()
+
+    # --- Stage 1: Ingest ---
+    meta: VideoMeta = ingest(input_path)
+    log.info(f"Source: {meta.path.name}  {meta.width}x{meta.height} "
+             f"{meta.fps:.2f}fps  {meta.duration:.1f}s")
+
+    # --- Stage 2: Audio extract ---
+    cache = _cache_dir_for(cfg, input_path)
+    trailer_cache = cache / "trailer"
+    trailer_cache.mkdir(parents=True, exist_ok=True)
+
+    audio_wav = cache / "audio.wav"
+    extract_audio(
+        meta.path, audio_wav,
+        sample_rate=cfg.audio.sample_rate,
+        codec=cfg.audio.codec,
+        overwrite=not use_cache,
+    )
+
+    # --- Stage 3: First-pass transcribe (cached) ---
+    transcript_cache = trailer_cache / "full_transcript.json"
+    if use_cache and transcript_cache.exists():
+        log.info(f"Reusing cached transcript: {transcript_cache}")
+        transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
+    else:
+        transcript = transcribe_first_pass(audio_wav, meta.duration, cfg)
+        transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
+        log.info(f"Cached transcript → {transcript_cache}")
+
+    # Pin language so the per-cut second-pass doesn't flip
+    if cfg.transcribe.language is None and transcript.language:
+        log.info(f"Pinning transcribe language to first-pass detection: {transcript.language}")
+        cfg.transcribe.language = transcript.language
+
+    # --- Stage 4: LLM picks (cached) ---
+    provider = build_provider(cfg.llm)
+    quotables_cache = trailer_cache / "quotables.json"
+    if use_cache and quotables_cache.exists():
+        log.info(f"Reusing cached quotables: {quotables_cache}")
+        picks = json.loads(quotables_cache.read_text())
+    else:
+        log.info("Asking LLM to pick 4-5 quotable sentences for the trailer...")
+        picks = pick_quotables(transcript, provider, cfg, meta.duration)
+        quotables_cache.write_text(json.dumps(picks, indent=2))
+        log.info(f"Cached quotables → {quotables_cache}")
+
+    if not picks:
+        log.error("LLM returned zero picks — nothing to produce")
+        return None
+
+    # --- Stage 5: LLM cut-bounds refinement (cached) ---
+    refined_cache = trailer_cache / "refined_bounds.json"
+    refined: list[dict] | None = None
+    if use_cache and refined_cache.exists():
+        try:
+            cached = json.loads(refined_cache.read_text())
+            keys_old = [(c.get("start"), c.get("end"), c.get("sentence")) for c in cached]
+            keys_new = [(p["start"], p["end"], p["sentence"]) for p in picks]
+            if keys_old == keys_new:
+                refined = cached
+                log.info(f"Reusing cached refined bounds: {refined_cache}")
+            else:
+                log.info("Cached bounds stale (picks changed); refining fresh")
+        except (KeyError, json.JSONDecodeError):
+            pass
+
+    if refined is None:
+        log.info(f"Refining cut bounds for {len(picks)} picks via LLM...")
+        refined = []
+        for q in picks:
+            cs, ce, refined_sentence = refine_cut_bounds_with_llm(
+                q, transcript, provider, cfg,
+            )
+            refined.append({
+                **q,
+                "cut_start": cs,
+                "cut_end": ce,
+                "refined_sentence": refined_sentence,
+            })
+        refined_cache.write_text(json.dumps(refined, indent=2))
+        log.info(f"Cached refined bounds → {refined_cache}")
+
+    picks = refined
+
+    spoken_total = sum(p["end"] - p["start"] for p in picks)
+    log.info(f"Got {len(picks)} picks; spoken duration ≈ {spoken_total:.1f}s")
+    for i, p in enumerate(picks, 1):
+        log.info(
+            f"  [{i:02d}] cut {p['cut_start']:7.2f}-{p['cut_end']:7.2f}  "
+            f"({p['cut_end']-p['cut_start']:.2f}s)  "
+            f"{p['refined_sentence'][:80]}"
+        )
+
+    # --- Stage 6: Per-pick cut + second-pass transcribe + shot-aware crop ---
+    cropped_clips: list[Path] = []
+    pick_words_list: list[list[Word]] = []
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task_id = progress.add_task(f"Trailer: cutting {len(picks)} picks", total=len(picks))
+        for i, q in enumerate(picks):
+            progress.update(task_id, description=f"[{i+1}/{len(picks)}] cut + crop")
+            seg_path = trailer_cache / f"q_{i:02d}_segment.mp4"
+            words_cache = trailer_cache / f"q_{i:02d}_words.json"
+            cropped_path = trailer_cache / f"q_{i:02d}_cropped.mp4"
+
+            if not seg_path.exists() or not use_cache:
+                trailer_cut_segment(meta.path, q["cut_start"], q["cut_end"], seg_path, cfg)
+
+            # Sharper subtitles: second-pass transcribe THIS cut (cached).
+            seg_words = transcribe_second_pass_cached(
+                seg_path, words_cache if use_cache else None, cfg,
+            )
+            pick_words_list.append(seg_words)
+
+            if not cropped_path.exists() or not use_cache:
+                per_frame_persons, _hf, _fps, clip_w, clip_h = (
+                    detect_humans_all_per_frame(seg_path, cfg)
+                )
+                is_wide = classify_wide_shot_frames(
+                    per_frame_persons,
+                    source_width=clip_w,
+                    source_height=clip_h,
+                    sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
+                    height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
+                    smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                )
+                smart_crop_916_stacked(seg_path, per_frame_persons, is_wide, cropped_path, cfg)
+            cropped_clips.append(cropped_path)
+            progress.advance(task_id)
+
+    # --- Stage 7: Concat with black gaps ---
+    stitched = trailer_cache / "stitched.mp4"
+    log.info(f"Stitching {len(cropped_clips)} clips with black gaps...")
+    concat_with_black_gaps(cropped_clips, stitched, cfg)
+
+    # --- Stage 8: Subtitles (no title overlay in trailer mode) ---
+    run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = Path(cfg.paths.output_dir) / run_stamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+    final_path = output_dir / "trailer.mp4"
+
+    log.info("Building trailer-time word timeline + burning subtitles...")
+    trailer_words = build_trailer_words(picks, pick_words_list, cfg)
+    burn_subtitles(stitched, trailer_words, final_path, cfg, title="")
+
+    # --- Stage 9: Sidecar + LLM-as-judge eval ---
+    sidecar_path = output_dir / "trailer.txt"
+    lines = [
+        f"source: {meta.path.name}",
+        f"source_duration: {meta.duration:.1f}s",
+        f"trailer_duration: ~{spoken_total + (len(picks)-1) * 0.6:.1f}s "
+        f"(spoken {spoken_total:.1f}s + gaps)",
+        f"picks: {len(picks)}",
+        "",
+        "=== PICKS ===",
+    ]
+    for i, q in enumerate(picks, 1):
+        lines.append(
+            f"[{i:02d}] {q['cut_start']:7.2f}-{q['cut_end']:7.2f}s "
+            f"({q['cut_end']-q['cut_start']:.2f}s) {q['refined_sentence']}"
+        )
+    sidecar_path.write_text("\n".join(lines) + "\n")
+
+    total_trailer_duration = spoken_total + max(0, len(picks) - 1) * float(
+        getattr(getattr(cfg, "trailer", SimpleNamespace()), "gap_seconds", 0.6)
+    )
+    scorecard = evaluate_trailer(picks, total_trailer_duration, provider, cfg)
+    scorecard.write_to(sidecar_path)
+
+    log.info(f"Trailer → {final_path}")
+    log.info(f"Sidecar → {sidecar_path}")
+    return final_path

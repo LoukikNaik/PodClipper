@@ -135,6 +135,20 @@ diarize:                         # DEPRECATED — only consulted by `crop.mode: 
   min_speakers: null
   max_speakers: null
 
+# Trailer mode (--mode trailer): pick 4-5 quotable sentences from across the
+# episode and splice them into one short trailer-style reel with brief black
+# transitions between cuts.
+trailer:
+  gap_seconds: 0.6               # duration of the black + silent gap between picks
+  head_pad: 0.10                 # buffer before the first spoken word of each cut
+  tail_pad: 0.10                 # buffer after the last spoken word of each cut
+  audio_fade_in_s: 0.08          # smooth cold-cut audio entry
+  audio_fade_out_s: 0.30         # smooth fade into the next black gap
+  refiner_window_s: 10.0         # ±seconds of word-level context shown to the
+                                 # refinement LLM call (where the speaker
+                                 # actually finishes the thought)
+  seg_out_fps: 30                # output framerate for the stitched trailer
+
 evaluate:
   enabled: true                  # run LLM-as-judge after each reel is rendered
   auto_skip: false               # if true, reels with verdict "skip" are moved to skipped/ dir
