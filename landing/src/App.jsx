@@ -143,24 +143,54 @@ function StatsBar() {
 }
 
 // ── Demo ─────────────────────────────────────────────────────────
-const REELS = [
+const EPISODES = [
   {
-    src: 'videos/reel_01_why-ravan-could-never-break-sita.mp4',
-    score: 'AI score 4.5 / 5 · Publish',
-    title: 'Why Ravan Could Never Break Sita',
-    note: "Sita's blade-of-grass defiance. The AI surfaced this moment at 6 min 54 sec and rated it ready to publish.",
+    youtubeId: 'RiHi4solYHE',
+    label: 'Episode 1 · youtube.com/watch?v=RiHi4solYHE',
+    reels: [
+      {
+        src: 'videos/reel_01_why-ravan-could-never-break-sita.mp4',
+        score: 'AI score 4.5 / 5 · Publish',
+        title: 'Why Ravan Could Never Break Sita',
+        note: "Sita's blade-of-grass defiance. The AI surfaced this moment at 6 min 54 sec and rated it ready to publish.",
+      },
+      {
+        src: 'videos/reel_02_she-reached-for-death-found-hope.mp4',
+        score: 'AI score 4.2 / 5 · Publish',
+        title: 'She Reached for Death, Found Hope',
+        note: 'A full emotional arc with a twist ending. 47 seconds, surfaced from the 12-minute mark.',
+      },
+      {
+        src: 'videos/reel_03_how-hanuman-knew-it-was-sita.mp4',
+        score: 'AI score 3.8 / 5 · Review',
+        title: 'How Hanuman Knew It Was Sita',
+        note: 'Detective-logic payoff at the 3 min 28 sec mark. Flagged for review with feedback on adding context.',
+      },
+    ],
   },
   {
-    src: 'videos/reel_02_she-reached-for-death-found-hope.mp4',
-    score: 'AI score 4.2 / 5 · Publish',
-    title: 'She Reached for Death, Found Hope',
-    note: 'A full emotional arc with a twist ending. 47 seconds, surfaced from the 12-minute mark.',
-  },
-  {
-    src: 'videos/reel_03_how-hanuman-knew-it-was-sita.mp4',
-    score: 'AI score 3.8 / 5 · Review',
-    title: 'How Hanuman Knew It Was Sita',
-    note: 'Detective-logic payoff at the 3 min 28 sec mark. Flagged for review with feedback on adding context.',
+    youtubeId: '9FtradY1AI4',
+    label: 'Episode 2 · youtube.com/watch?v=9FtradY1AI4',
+    reels: [
+      {
+        src: 'videos/reel_01_confidence-is-an-output-not-input.mp4',
+        score: 'AI score 3.3 / 5 · Review',
+        title: 'Confidence Is an Output, Not Input',
+        note: 'A contrarian reframe with a vivid personal-story payoff. Surfaced from the 1:49 mark.',
+      },
+      {
+        src: 'videos/reel_02_make-anxiety-sit-in-the-back-seat.mp4',
+        score: 'AI score 3.3 / 5 · Review',
+        title: 'Make Anxiety Sit in the Back Seat',
+        note: 'A memorable car-seat metaphor for handling anxiety in unknown territory. Surfaced from the 11:21 mark.',
+      },
+      {
+        src: 'videos/reel_03_the-market-wont-kill-your-business.mp4',
+        score: 'AI score 3.2 / 5 · Review',
+        title: "The Market Won't Kill Your Business",
+        note: 'Counterintuitive founder advice backed by a concrete COVID example. Surfaced from the 16:42 mark.',
+      },
+    ],
   },
 ]
 
@@ -207,55 +237,62 @@ function Phone({ src, score, title, note, delay = 0 }) {
   )
 }
 
+function EpisodeBlock({ episode, index }) {
+  const [yRef, yVisible] = useReveal()
+  return (
+    <div className="episode-block">
+      <div ref={yRef} className={`yt-card${yVisible ? ' visible' : ''}`}>
+        <div className="yt-label">
+          <span className="yt-dot" />
+          {episode.label}
+        </div>
+        <div className="yt-frame">
+          <iframe
+            src={`https://www.youtube.com/embed/${episode.youtubeId}`}
+            title={`Source podcast episode ${index + 1}`}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+          />
+        </div>
+      </div>
+
+      <div className="connector" aria-hidden>
+        <div className="connector-track">
+          <div className="connector-line" />
+          <span className="connector-pill">PodClipper clipped this episode</span>
+          <div className="connector-line" />
+        </div>
+        <span className="connector-arrow">↓</span>
+      </div>
+
+      <div className="phones">
+        {episode.reels.map((r, i) => (
+          <Phone key={r.src} {...r} delay={i * 90} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function Demo() {
   const [hRef, hVisible] = useReveal()
-  const [yRef, yVisible] = useReveal()
 
   return (
     <section className="demo-section" id="demo">
       <div className="container">
         <div ref={hRef} className={`demo-head${hVisible ? ' visible' : ''}`}>
           <p className="eyebrow">See it in action</p>
-          <h2 className="h2">One episode in.<br /><em>Three reels out.</em></h2>
+          <h2 className="h2">Two episodes in.<br /><em>Six reels out.</em></h2>
           <p className="lead">
-            A full podcast episode fed into PodClipper. Every clip selection,
+            Two distinct podcast episodes fed into PodClipper. Different topics,
+            different speakers, same automated pipeline. Every clip selection,
             crop decision, caption, and title came from the AI. No human
             touched the timeline.
           </p>
         </div>
-
-        {/* Source embed */}
-        <div ref={yRef} className={`yt-card${yVisible ? ' visible' : ''}`}>
-          <div className="yt-label">
-            <span className="yt-dot" />
-            Source episode · youtube.com/watch?v=RiHi4solYHE
-          </div>
-          <div className="yt-frame">
-            <iframe
-              src="https://www.youtube.com/embed/RiHi4solYHE"
-              title="Source podcast episode"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-            />
-          </div>
-        </div>
-
-        {/* Connector */}
-        <div className="connector" aria-hidden>
-          <div className="connector-track">
-            <div className="connector-line" />
-            <span className="connector-pill">PodClipper clipped this episode</span>
-            <div className="connector-line" />
-          </div>
-          <span className="connector-arrow">↓</span>
-        </div>
-
-        {/* Output reels */}
-        <div className="phones">
-          {REELS.map((r, i) => (
-            <Phone key={r.src} {...r} delay={i * 90} />
-          ))}
-        </div>
+        {EPISODES.map((ep, idx) => (
+          <EpisodeBlock key={ep.youtubeId} episode={ep} index={idx} />
+        ))}
       </div>
     </section>
   )
