@@ -113,3 +113,4 @@ secrets.json
 *.tmp
 *.bak
 *.orig
+.venv*
