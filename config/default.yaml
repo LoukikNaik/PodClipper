@@ -32,14 +32,18 @@ transcribe:
     max_tokens_per_call: 2000    # safety cap
 
 llm:
-  provider: claude_cli           # claude_cli | anthropic_api
-  model: claude-opus-4-6         # used by anthropic_api; claude_cli picks its default
+  provider: claude_cli           # claude_cli | litellm
+  model: anthropic/claude-sonnet-4-5   # litellm format: '<vendor>/<model>'.
+                                 # ignored by claude_cli (it picks its own).
   max_tokens: 4096
   claude_cli:
     binary: claude               # path to CLI; "claude" uses $PATH
     extra_args: []
-  anthropic_api:
-    api_key_env: ANTHROPIC_API_KEY
+  litellm:
+    api_base: null               # set to e.g. http://localhost:11434 for
+                                 # ollama / vLLM / proxies; null = vendor default
+    timeout_seconds: 900
+    num_retries: 2
 
 analyze:
   min_clip_seconds: 15
