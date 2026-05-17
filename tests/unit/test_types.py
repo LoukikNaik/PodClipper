@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.types import BBox, Clip, Transcript, TranscriptSegment
+from podclipper.types import BBox, Clip, Transcript, TranscriptSegment
 
 
 # --------------------------------------------------------------------------- #

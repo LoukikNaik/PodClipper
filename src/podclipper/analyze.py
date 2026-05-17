@@ -15,7 +15,7 @@ from .types import Clip, Transcript, TranscriptSegment, Word
 
 log = logging.getLogger("ave.analyze")
 
-_PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "prompts" / "reel_detector.txt"
+_PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "reel_detector.txt"
 
 
 class AnalyzeError(Exception):
@@ -163,7 +163,7 @@ def _snap_to_segment_boundaries(
 
 
 _REEL_REFINER_PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "reel_refiner.txt"
+    Path(__file__).resolve().parent.parent.parent / "prompts" / "reel_refiner.txt"
 )
 
 

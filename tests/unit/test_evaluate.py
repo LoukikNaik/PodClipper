@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.evaluate import (
+from podclipper.evaluate import (
     ContentScores,
     ReelScorecard,
     TechMetrics,
@@ -35,7 +35,7 @@ from src.evaluate import (
     evaluate_content,
     evaluate_trailer,
 )
-from src.types import Word
+from podclipper.types import Word
 
 
 # --------------------------------------------------------------------------- #
@@ -263,7 +263,7 @@ def test_evaluate_content_returns_skip_when_transcript_is_empty(mocker) -> None:
 
 def test_evaluate_content_returns_review_when_llm_raises(mocker) -> None:
     """LLMError from provider → verdict='review', feedback includes 'LLM eval failed'."""
-    from src.llm import LLMError
+    from podclipper.llm import LLMError
     cfg = _eval_cfg()
     provider = mocker.MagicMock()
     provider.complete.side_effect = LLMError("network died")
@@ -348,7 +348,7 @@ def test_evaluate_trailer_returns_disabled_when_evaluation_disabled(mocker) -> N
 
 
 def test_evaluate_trailer_falls_back_to_review_when_llm_raises(mocker) -> None:
-    from src.llm import LLMError
+    from podclipper.llm import LLMError
     cfg = _eval_cfg()
     provider = mocker.MagicMock()
     provider.complete.side_effect = LLMError("died")

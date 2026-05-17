@@ -7,10 +7,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.config import load_config
-from src.detect import detect_humans_per_frame
-from src.logging_util import setup_logging
-from src.timeline import _cluster_x_centers, build_speaker_timeline, apply_min_dwell
+from podclipper.config import load_config
+from podclipper.detect import detect_humans_per_frame
+from podclipper.logging_util import setup_logging
+from podclipper.timeline import _cluster_x_centers, build_speaker_timeline, apply_min_dwell
 
 
 def main() -> int:

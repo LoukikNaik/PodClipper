@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.llm import LLMError
+from podclipper.llm import LLMError
 
 
 # --------------------------------------------------------------------------- #
@@ -21,7 +21,7 @@ from src.llm import LLMError
 
 def test_init_sets_name_attribute_to_litellm_and_stores_model() -> None:
     """LiteLLMProvider(cfg, model) → name='litellm', self.model=model."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     provider = LiteLLMProvider(SimpleNamespace(), model="anthropic/claude-sonnet-4-5")
 
@@ -42,7 +42,7 @@ def _make_litellm_response(mocker, content: str):
 
 def test_complete_returns_message_content_from_litellm_response(mocker) -> None:
     """complete() returns response.choices[0].message.content unchanged."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "hello world")
@@ -59,7 +59,7 @@ def test_complete_returns_message_content_from_litellm_response(mocker) -> None:
 
 def test_complete_passes_configured_model_string_to_litellm(mocker) -> None:
     """The model string passed to __init__ is forwarded as model= to litellm.completion."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
@@ -76,7 +76,7 @@ def test_complete_passes_configured_model_string_to_litellm(mocker) -> None:
 
 def test_complete_wraps_user_prompt_in_user_role_message(mocker) -> None:
     """With no system_prompt, messages contains exactly one user-role entry."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
@@ -97,7 +97,7 @@ def test_complete_prepends_system_prompt_as_system_message_when_provided(
     mocker,
 ) -> None:
     """Non-empty system_prompt → messages=[{system}, {user}] in that order."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
@@ -117,7 +117,7 @@ def test_complete_prepends_system_prompt_as_system_message_when_provided(
 
 def test_complete_forwards_max_tokens_kwarg_to_litellm(mocker) -> None:
     """max_tokens passed to complete() is forwarded to litellm.completion."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
@@ -134,7 +134,7 @@ def test_complete_forwards_max_tokens_kwarg_to_litellm(mocker) -> None:
 
 def test_complete_raises_llmerror_when_litellm_call_raises(mocker) -> None:
     """Any exception from litellm.completion is wrapped in LLMError."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.side_effect = RuntimeError("upstream blew up")
@@ -150,7 +150,7 @@ def test_complete_raises_llmerror_when_litellm_call_raises(mocker) -> None:
 
 def test_complete_raises_llmerror_when_response_content_is_empty(mocker) -> None:
     """Whitespace-only content from litellm → LLMError (don't return empty string)."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "   \n  ")
@@ -166,7 +166,7 @@ def test_complete_raises_llmerror_when_response_content_is_empty(mocker) -> None
 
 def test_complete_forwards_api_base_when_set_in_cfg(mocker) -> None:
     """cfg.api_base (when truthy) → api_base= kwarg on litellm.completion."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
@@ -184,7 +184,7 @@ def test_complete_forwards_api_base_when_set_in_cfg(mocker) -> None:
 
 def test_complete_forwards_timeout_seconds_from_cfg(mocker) -> None:
     """cfg.timeout_seconds → timeout= kwarg on litellm.completion."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
@@ -203,7 +203,7 @@ def test_complete_forwards_timeout_seconds_from_cfg(mocker) -> None:
 
 def test_complete_forwards_num_retries_from_cfg(mocker) -> None:
     """cfg.num_retries → num_retries= kwarg on litellm.completion."""
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
@@ -228,7 +228,7 @@ def test_complete_forwards_api_key_from_configured_env_var(
     Lets users point at OpenAI-compatible gateways (TokenRouter, OpenRouter,
     Helicone, ...) without overloading OPENAI_API_KEY with a non-OpenAI key.
     """
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     monkeypatch.setenv("TOKENROUTER_API_KEY", "tr-sekret")
     mock_completion = mocker.patch("litellm.completion")
@@ -256,7 +256,7 @@ def test_init_raises_litellm_internal_logger_to_warning() -> None:
     Locking the level prevents that footgun.
     """
     import logging
-    from src.llm.litellm_provider import LiteLLMProvider
+    from podclipper.llm.litellm_provider import LiteLLMProvider
 
     # set it low to prove init actively raises it
     logging.getLogger("LiteLLM").setLevel(logging.DEBUG)

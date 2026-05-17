@@ -21,8 +21,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.llm import LLMError
-from src.llm.claude_cli import ClaudeCLIProvider
+from podclipper.llm import LLMError
+from podclipper.llm.claude_cli import ClaudeCLIProvider
 
 
 # --------------------------------------------------------------------------- #
@@ -31,7 +31,7 @@ from src.llm.claude_cli import ClaudeCLIProvider
 
 def test_init_uses_defaults_when_cfg_missing_attributes(mocker) -> None:
     """No cfg attributes → binary='claude', extra_args=[], timeout=900."""
-    mocker.patch("src.llm.claude_cli.shutil.which", return_value="/usr/local/bin/claude")
+    mocker.patch("podclipper.llm.claude_cli.shutil.which", return_value="/usr/local/bin/claude")
 
     provider = ClaudeCLIProvider(SimpleNamespace())
 
@@ -42,7 +42,7 @@ def test_init_uses_defaults_when_cfg_missing_attributes(mocker) -> None:
 
 def test_init_reads_cfg_overrides_for_binary_extra_args_and_timeout(mocker) -> None:
     """Custom cfg values override the defaults."""
-    mocker.patch("src.llm.claude_cli.shutil.which", return_value="/opt/claude")
+    mocker.patch("podclipper.llm.claude_cli.shutil.which", return_value="/opt/claude")
     cfg = SimpleNamespace(
         binary="/opt/claude",
         extra_args=["--verbose"],
@@ -58,7 +58,7 @@ def test_init_reads_cfg_overrides_for_binary_extra_args_and_timeout(mocker) -> N
 
 def test_init_raises_llmerror_when_claude_binary_not_on_path(mocker) -> None:
     """No binary at given path → LLMError with hint to install Claude Code."""
-    mocker.patch("src.llm.claude_cli.shutil.which", return_value=None)
+    mocker.patch("podclipper.llm.claude_cli.shutil.which", return_value=None)
 
     with pytest.raises(LLMError, match="claude CLI binary"):
         ClaudeCLIProvider(SimpleNamespace())
@@ -69,14 +69,14 @@ def test_init_raises_llmerror_when_claude_binary_not_on_path(mocker) -> None:
 # --------------------------------------------------------------------------- #
 
 def _make_provider(mocker) -> ClaudeCLIProvider:
-    mocker.patch("src.llm.claude_cli.shutil.which", return_value="/usr/local/bin/claude")
+    mocker.patch("podclipper.llm.claude_cli.shutil.which", return_value="/usr/local/bin/claude")
     return ClaudeCLIProvider(SimpleNamespace())
 
 
 def test_complete_returns_stripped_stdout_on_success(mocker) -> None:
     """Stdout is returned with surrounding whitespace stripped."""
     provider = _make_provider(mocker)
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.return_value = mocker.MagicMock(stdout="  hello world  \n", stderr="")
 
     result = provider.complete("question?")
@@ -89,7 +89,7 @@ def test_complete_concatenates_system_and_user_prompts_with_double_newline(
 ) -> None:
     """When system_prompt given, stdin is `{system}\\n\\n{user}` (CLI has no --system flag)."""
     provider = _make_provider(mocker)
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.return_value = mocker.MagicMock(stdout="ok", stderr="")
 
     provider.complete(user_prompt="ask", system_prompt="be brief")
@@ -101,7 +101,7 @@ def test_complete_concatenates_system_and_user_prompts_with_double_newline(
 def test_complete_passes_only_user_prompt_when_no_system_prompt(mocker) -> None:
     """Empty system_prompt → stdin is just the user_prompt."""
     provider = _make_provider(mocker)
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.return_value = mocker.MagicMock(stdout="ok", stderr="")
 
     provider.complete(user_prompt="just this")
@@ -111,11 +111,11 @@ def test_complete_passes_only_user_prompt_when_no_system_prompt(mocker) -> None:
 
 def test_complete_builds_command_with_p_and_output_format_text(mocker) -> None:
     """Command = [binary, '-p', '--output-format', 'text', *extra_args]."""
-    mocker.patch("src.llm.claude_cli.shutil.which", return_value="/x/claude")
+    mocker.patch("podclipper.llm.claude_cli.shutil.which", return_value="/x/claude")
     provider = ClaudeCLIProvider(SimpleNamespace(
         binary="/x/claude", extra_args=["--debug"],
     ))
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.return_value = mocker.MagicMock(stdout="ok", stderr="")
 
     provider.complete("hi")
@@ -126,9 +126,9 @@ def test_complete_builds_command_with_p_and_output_format_text(mocker) -> None:
 
 def test_complete_passes_configured_timeout_to_subprocess(mocker) -> None:
     """timeout_seconds is forwarded to subprocess.run's timeout kwarg."""
-    mocker.patch("src.llm.claude_cli.shutil.which", return_value="/x/claude")
+    mocker.patch("podclipper.llm.claude_cli.shutil.which", return_value="/x/claude")
     provider = ClaudeCLIProvider(SimpleNamespace(timeout_seconds=42))
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.return_value = mocker.MagicMock(stdout="ok", stderr="")
 
     provider.complete("hi")
@@ -139,7 +139,7 @@ def test_complete_passes_configured_timeout_to_subprocess(mocker) -> None:
 def test_complete_raises_llmerror_on_subprocess_timeout(mocker) -> None:
     """TimeoutExpired → LLMError mentioning the configured timeout."""
     provider = _make_provider(mocker)
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=900)
 
     with pytest.raises(LLMError, match="timed out after 900"):
@@ -149,7 +149,7 @@ def test_complete_raises_llmerror_on_subprocess_timeout(mocker) -> None:
 def test_complete_raises_llmerror_on_nonzero_exit_code(mocker) -> None:
     """CalledProcessError → LLMError including the last 500 chars of stderr."""
     provider = _make_provider(mocker)
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.side_effect = subprocess.CalledProcessError(
         returncode=2, cmd="claude", stderr="bad things happened",
     )
@@ -161,7 +161,7 @@ def test_complete_raises_llmerror_on_nonzero_exit_code(mocker) -> None:
 def test_complete_raises_llmerror_when_stdout_is_empty(mocker) -> None:
     """Empty stdout (even after timeout-free exit-0) → LLMError."""
     provider = _make_provider(mocker)
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.return_value = mocker.MagicMock(stdout="   \n", stderr="")
 
     with pytest.raises(LLMError, match="empty output"):
@@ -180,7 +180,7 @@ def test_complete_ignores_max_tokens_kwarg(mocker) -> None:
     future attempt to plumb max_tokens through (e.g. via a new --max-tokens
     CLI arg) breaks here loudly."""
     provider = _make_provider(mocker)
-    mock_run = mocker.patch("src.llm.claude_cli.subprocess.run")
+    mock_run = mocker.patch("podclipper.llm.claude_cli.subprocess.run")
     mock_run.return_value = mocker.MagicMock(stdout="ok", stderr="")
 
     provider.complete("hi", max_tokens=100)

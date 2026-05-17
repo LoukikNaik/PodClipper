@@ -9,12 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.llm import LLMError, build_provider
+from podclipper.llm import LLMError, build_provider
 
 
 def test_build_provider_routes_claude_cli_to_claudecliprovider(mocker) -> None:
     """`provider: 'claude_cli'` constructs ClaudeCLIProvider with `cfg.claude_cli`."""
-    fake_class = mocker.patch("src.llm.claude_cli.ClaudeCLIProvider")
+    fake_class = mocker.patch("podclipper.llm.claude_cli.ClaudeCLIProvider")
     cfg = SimpleNamespace(
         provider="claude_cli",
         claude_cli=SimpleNamespace(timeout_seconds=900),
@@ -28,7 +28,7 @@ def test_build_provider_routes_claude_cli_to_claudecliprovider(mocker) -> None:
 
 def test_build_provider_routes_litellm_to_litellmprovider(mocker) -> None:
     """`provider: 'litellm'` constructs LiteLLMProvider with cfg.litellm + model."""
-    fake_class = mocker.patch("src.llm.litellm_provider.LiteLLMProvider")
+    fake_class = mocker.patch("podclipper.llm.litellm_provider.LiteLLMProvider")
     cfg = SimpleNamespace(
         provider="litellm",
         model="anthropic/claude-sonnet-4-5",

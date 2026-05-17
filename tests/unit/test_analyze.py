@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.analyze import (
+from podclipper.analyze import (
     AnalyzeError,
     _coerce_clip,
     _extract_json_array,
@@ -32,7 +32,7 @@ from src.analyze import (
     _snap_to_segment_boundaries,
     _transcript_excerpt,
 )
-from src.types import Clip, Transcript, TranscriptSegment, Word
+from podclipper.types import Clip, Transcript, TranscriptSegment, Word
 
 
 # --------------------------------------------------------------------------- #
