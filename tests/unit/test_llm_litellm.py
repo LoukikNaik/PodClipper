@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from src.llm import LLMError
+
 
 # --------------------------------------------------------------------------- #
 # Cycle 1.1 — init stores model and exposes name
@@ -122,3 +126,19 @@ def test_complete_forwards_max_tokens_kwarg_to_litellm(mocker) -> None:
     provider.complete("hi", max_tokens=1234)
 
     assert mock_completion.call_args.kwargs["max_tokens"] == 1234
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.7 — wrap any litellm exception in LLMError
+# --------------------------------------------------------------------------- #
+
+def test_complete_raises_llmerror_when_litellm_call_raises(mocker) -> None:
+    """Any exception from litellm.completion is wrapped in LLMError."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.side_effect = RuntimeError("upstream blew up")
+    provider = LiteLLMProvider(SimpleNamespace(), model="anthropic/claude-x")
+
+    with pytest.raises(LLMError, match="litellm"):
+        provider.complete("hi")

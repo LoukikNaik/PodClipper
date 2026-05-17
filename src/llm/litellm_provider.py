@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from .base import LLMError
+
 
 class LiteLLMProvider:
     name = "litellm"
@@ -24,9 +26,12 @@ class LiteLLMProvider:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
 
-        response = litellm.completion(
-            model=self.model,
-            messages=messages,
-            max_tokens=max_tokens,
-        )
+        try:
+            response = litellm.completion(
+                model=self.model,
+                messages=messages,
+                max_tokens=max_tokens,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise LLMError(f"litellm call failed: {e}") from e
         return response.choices[0].message.content
