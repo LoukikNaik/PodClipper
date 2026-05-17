@@ -12,6 +12,7 @@ class LiteLLMProvider:
 
     def __init__(self, cfg: SimpleNamespace, model: str):
         self.model = model
+        self.api_base = getattr(cfg, "api_base", None)
 
     def complete(
         self,
@@ -26,12 +27,16 @@ class LiteLLMProvider:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
 
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+
         try:
-            response = litellm.completion(
-                model=self.model,
-                messages=messages,
-                max_tokens=max_tokens,
-            )
+            response = litellm.completion(**kwargs)
         except Exception as e:  # noqa: BLE001
             raise LLMError(f"litellm call failed: {e}") from e
 

@@ -158,3 +158,21 @@ def test_complete_raises_llmerror_when_response_content_is_empty(mocker) -> None
 
     with pytest.raises(LLMError, match="empty"):
         provider.complete("hi")
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.9 — api_base forwarded when set in cfg (for Ollama/vLLM/proxies)
+# --------------------------------------------------------------------------- #
+
+def test_complete_forwards_api_base_when_set_in_cfg(mocker) -> None:
+    """cfg.api_base (when truthy) → api_base= kwarg on litellm.completion."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "ok")
+    cfg = SimpleNamespace(api_base="http://localhost:11434")
+    provider = LiteLLMProvider(cfg, model="ollama/llama3")
+
+    provider.complete("hi")
+
+    assert mock_completion.call_args.kwargs["api_base"] == "http://localhost:11434"
