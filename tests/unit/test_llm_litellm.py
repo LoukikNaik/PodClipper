@@ -214,3 +214,30 @@ def test_complete_forwards_num_retries_from_cfg(mocker) -> None:
     provider.complete("hi")
 
     assert mock_completion.call_args.kwargs["num_retries"] == 3
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.16 — api_key resolved from cfg.api_key_env and forwarded
+# --------------------------------------------------------------------------- #
+
+def test_complete_forwards_api_key_from_configured_env_var(
+    mocker, monkeypatch,
+) -> None:
+    """cfg.api_key_env names the env var to read; its value → api_key= kwarg.
+
+    Lets users point at OpenAI-compatible gateways (TokenRouter, OpenRouter,
+    Helicone, ...) without overloading OPENAI_API_KEY with a non-OpenAI key.
+    """
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    monkeypatch.setenv("TOKENROUTER_API_KEY", "tr-sekret")
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "ok")
+    provider = LiteLLMProvider(
+        SimpleNamespace(api_key_env="TOKENROUTER_API_KEY"),
+        model="openai/anthropic/claude-sonnet-4.5",
+    )
+
+    provider.complete("hi")
+
+    assert mock_completion.call_args.kwargs["api_key"] == "tr-sekret"

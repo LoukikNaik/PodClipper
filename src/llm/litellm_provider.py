@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 from .base import LLMError
@@ -15,6 +16,8 @@ class LiteLLMProvider:
         self.api_base = getattr(cfg, "api_base", None)
         self.timeout = getattr(cfg, "timeout_seconds", None)
         self.num_retries = getattr(cfg, "num_retries", None)
+        api_key_env = getattr(cfg, "api_key_env", None)
+        self.api_key = os.environ.get(api_key_env) if api_key_env else None
 
     def complete(
         self,
@@ -40,6 +43,8 @@ class LiteLLMProvider:
             kwargs["timeout"] = self.timeout
         if self.num_retries is not None:
             kwargs["num_retries"] = self.num_retries
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
 
         try:
             response = litellm.completion(**kwargs)
