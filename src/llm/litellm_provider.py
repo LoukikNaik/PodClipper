@@ -34,4 +34,8 @@ class LiteLLMProvider:
             )
         except Exception as e:  # noqa: BLE001
             raise LLMError(f"litellm call failed: {e}") from e
-        return response.choices[0].message.content
+
+        text = response.choices[0].message.content or ""
+        if not text.strip():
+            raise LLMError("litellm returned empty content")
+        return text

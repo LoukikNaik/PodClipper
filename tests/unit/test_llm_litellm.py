@@ -142,3 +142,19 @@ def test_complete_raises_llmerror_when_litellm_call_raises(mocker) -> None:
 
     with pytest.raises(LLMError, match="litellm"):
         provider.complete("hi")
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.8 — empty / whitespace-only content raises LLMError
+# --------------------------------------------------------------------------- #
+
+def test_complete_raises_llmerror_when_response_content_is_empty(mocker) -> None:
+    """Whitespace-only content from litellm → LLMError (don't return empty string)."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "   \n  ")
+    provider = LiteLLMProvider(SimpleNamespace(), model="anthropic/claude-x")
+
+    with pytest.raises(LLMError, match="empty"):
+        provider.complete("hi")
