@@ -12,13 +12,13 @@ and add batching/chunking where the risk is real.
 
 | LLM call site | File | Risk surface |
 |---|---|---|
-| Reel selection | `src/analyze.py::analyze_for_reels` | Sends full first-pass transcript. ~10-12K tokens per hour of audio. Multi-hour episodes could approach limits. |
-| Transcript cleanup | `src/transcribe_cleanup.py::cleanup_words` | Already enforces `max_tokens_per_call: 2000` — verify it actually batches and doesn't silently truncate. |
-| Reel title rewrite | `src/analyze.py::_rewrite_title_with_llm` | Tiny per-call; safe. |
-| **Reel content evaluator** | `src/evaluate.py::evaluate_content` | Sends one reel's title + transcript per call. ~250-500 tokens. Safe today, but if we ever batch multiple reels into one call to save round-trips, mind the limit. |
-| Trailer pick selection | `src/trailer.py::pick_quotables` | Sends full first-pass transcript. Same risk as reel selection. |
-| Trailer bounds refiner | `src/trailer.py::refine_cut_bounds_with_llm` | Per-pick ±10s word window. Small. Safe. |
-| **Trailer evaluator** | `src/evaluate.py::evaluate_trailer` | 4-5 picks worth of sentences + durations. Tiny. Safe today. |
+| Reel selection | `src/podclipper/analyze.py::analyze_for_reels` | Sends full first-pass transcript. ~10-12K tokens per hour of audio. Multi-hour episodes could approach limits. |
+| Transcript cleanup | `src/podclipper/transcribe_cleanup.py::cleanup_words` | Already enforces `max_tokens_per_call: 2000` — verify it actually batches and doesn't silently truncate. |
+| Reel title rewrite | `src/podclipper/analyze.py::_rewrite_title_with_llm` | Tiny per-call; safe. |
+| **Reel content evaluator** | `src/podclipper/evaluate.py::evaluate_content` | Sends one reel's title + transcript per call. ~250-500 tokens. Safe today, but if we ever batch multiple reels into one call to save round-trips, mind the limit. |
+| Trailer pick selection | `src/podclipper/trailer.py::pick_quotables` | Sends full first-pass transcript. Same risk as reel selection. |
+| Trailer bounds refiner | `src/podclipper/trailer.py::refine_cut_bounds_with_llm` | Per-pick ±10s word window. Small. Safe. |
+| **Trailer evaluator** | `src/podclipper/evaluate.py::evaluate_trailer` | 4-5 picks worth of sentences + durations. Tiny. Safe today. |
 
 **What to do:**
 
@@ -48,7 +48,7 @@ that hits on each cut) to glue the picks together emotionally.
 
 **Where to look:**
 
-`src/trailer.py::concat_with_black_gaps` — the filter_complex builder
+`src/podclipper/trailer.py::concat_with_black_gaps` — the filter_complex builder
 that currently splices each cropped clip + a `color=black` + `anullsrc`
 gap. The audio gap is the substitution point.
 
@@ -89,7 +89,7 @@ independently.
 
 **Where to look:**
 
-`src/subtitles.py::burn_subtitles` — the final stage that muxes audio back
+`src/podclipper/subtitles.py::burn_subtitles` — the final stage that muxes audio back
 into each cropped reel. The audio mux is the splice point; we'd add a
 second audio input (the music bed) and `amix` them with sidechain ducking.
 Alternative: do this as a separate pass right before the audio fade-out
@@ -137,7 +137,7 @@ first second.
 
 **Where to look:**
 
-`src/subtitles.py::_draw_title_overlay` (or wherever the title is
+`src/podclipper/subtitles.py::_draw_title_overlay` (or wherever the title is
 rendered onto each frame in the first 3.5s) — that's the splice point
 for typography/color/animation changes. Knobs already live in
 `cfg.subtitles.title_overlay.*` (`font_size`, `color`, `outline_color`,
@@ -176,7 +176,7 @@ to what TikTok/Reels editors ship today.
 
 **Where to look:**
 
-`src/subtitles.py::burn_subtitles` — the per-frame caption renderer.
+`src/podclipper/subtitles.py::burn_subtitles` — the per-frame caption renderer.
 The active-word lookup is `[w for w in words if w.start <= t <= w.end]`;
 that's where per-word styling kicks in.
 
@@ -283,7 +283,7 @@ This is a wholly new pipeline, not a flag on the existing one. New
 super-fans, creator-stans) than the podcaster audience the rest of the
 tool targets. Built on top of the same shot-aware crop and subtitle
 plumbing, but driven by entirely different selection + styling logic.
-Likely a separate `src/highlights.py` module + `run_highlights_pipeline`
+Likely a separate `src/podclipper/highlights.py` module + `run_highlights_pipeline`
 in pipeline.py, mirroring the structure of trailer mode.
 
 Multi-month effort. Not blocking. Listed here so the moving pieces are
@@ -298,9 +298,9 @@ via `anthropic/<model>` strings, so a separate native provider is redundant.
 
 **Scope:**
 
-- Add `src/llm/litellm_provider.py` implementing the `LLMProvider` Protocol.
+- Add `src/podclipper/llm/litellm_provider.py` implementing the `LLMProvider` Protocol.
 - Register `"litellm"` in `build_provider()`.
-- **Delete** `src/llm/anthropic_api.py` and its branch in `build_provider()`.
+- **Delete** `src/podclipper/llm/anthropic_api.py` and its branch in `build_provider()`.
 - Update `--llm-provider` CLI choices: `{claude_cli, litellm}` (was
   `{claude_cli, anthropic_api}`).
 - Three characterization tests in `tests/unit/` are time-bombed for this
