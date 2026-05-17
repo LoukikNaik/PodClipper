@@ -51,23 +51,25 @@ Source video
 
 | File | Role |
 |---|---|
-| `main.py` | CLI entry point. Loads `.env`, parses flags, calls `run_pipeline`. |
-| `src/pipeline.py` | Orchestrator. Holds the per-clip loop and the `crop.mode` branch. |
-| `src/ingest.py` | ffprobe wrapper, returns `VideoMeta`. |
-| `src/audio.py` | Whole-video audio extraction. |
-| `src/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). |
-| `src/transcribe_cleanup.py` | LLM post-pass to fix Whisper mis-spellings / transliterate non-Latin. |
-| `src/analyze.py` | LLM clip selection — reads transcript, returns `Clip[]`. |
-| `src/llm/` | Provider abstraction. `claude_cli.py` (default, configurable timeout), `litellm_provider.py` (unified gateway: Anthropic, OpenAI, Gemini, Groq, Ollama, ...). |
-| `src/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |
-| `src/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the new shot-aware path. |
-| `src/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and new `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel). |
-| `src/subtitles.py` | Karaoke word-highlight burner + fading title overlay + audio fade-out. |
-| `src/evaluate.py` | LLM-as-judge scorer; writes `verdict` + numeric scores into reel sidecar. |
-| `src/diarize.py` | **No longer in the hot path.** pyannote.audio + mouth-motion linking; kept for reference / single-locked-camera future use. |
-| `src/types.py` | Shared dataclasses: `BBox`, `Word`, `Clip`, `Timeline`, etc. |
-| `src/config.py` | YAML loader → `SimpleNamespace` tree. |
-| `config/default.yaml` | All knobs. Key: `crop.mode` = `auto` (shot-aware) or `single` (legacy). |
+| `src/podclipper/main.py` | CLI entry point (`podclipper = "podclipper.main:main"` in pyproject.toml). Loads `.env`, parses flags, calls `run_pipeline`. |
+| `src/podclipper/pipeline.py` | Orchestrator. Holds the per-clip loop and the `crop.mode` branch. |
+| `src/podclipper/ingest.py` | ffprobe wrapper, returns `VideoMeta`. |
+| `src/podclipper/audio.py` | Whole-video audio extraction. |
+| `src/podclipper/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). |
+| `src/podclipper/transcribe_cleanup.py` | LLM post-pass to fix Whisper mis-spellings / transliterate non-Latin. |
+| `src/podclipper/analyze.py` | LLM clip selection — reads transcript, returns `Clip[]`. |
+| `src/podclipper/llm/` | Provider abstraction. `claude_cli.py` (default, configurable timeout), `litellm_provider.py` (unified gateway: Anthropic, OpenAI, Gemini, Groq, Ollama, ...). |
+| `src/podclipper/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |
+| `src/podclipper/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the new shot-aware path. |
+| `src/podclipper/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and new `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel). |
+| `src/podclipper/subtitles.py` | Karaoke word-highlight burner + fading title overlay + audio fade-out. |
+| `src/podclipper/evaluate.py` | LLM-as-judge scorer; writes `verdict` + numeric scores into reel sidecar. |
+| `src/podclipper/diarize.py` | **No longer in the hot path.** pyannote.audio + mouth-motion linking; kept for reference / single-locked-camera future use. |
+| `src/podclipper/types.py` | Shared dataclasses: `BBox`, `Word`, `Clip`, `Timeline`, etc. |
+| `src/podclipper/config.py` | YAML loader → `SimpleNamespace` tree. |
+| `src/podclipper/config/default.yaml` | All knobs (bundled inside the wheel via `importlib.resources`). Key: `crop.mode` = `auto` (shot-aware) or `single` (legacy). |
+| `src/podclipper/config/__init__.py` | `load_config(path)` for explicit `-c` flag; `load_default_config()` for the packaged file (used when no `-c` given). |
+| `src/podclipper/prompts/` | 5 system prompts (`reel_detector`, `reel_refiner`, `trailer_picks/refiner/evaluator`) loaded via `load_prompt(name)` — also bundled in the wheel. |
 
 ## The shot-aware crop path (current default)
 
@@ -103,7 +105,7 @@ sensitive to pose jitter; using the much larger YOLO body bbox as the
 hysteresis signal means only real human movement triggers crop updates,
 not landmark noise.
 
-Tunable knobs (`config/default.yaml` → `crop:`):
+Tunable knobs (`src/podclipper/config/default.yaml` → `crop:`):
 - `stacked_iou_threshold` (0.70) — lower = more lock retention
 - `stacked_transition_frames` (12) — higher = smoother but slower settle
 - `stacked_miss_tolerance` (15) — bridge this many bad frames
@@ -139,26 +141,32 @@ each with a `.txt` sidecar containing:
 
 ## Important CLI commands
 
+Install first: `pip install -e .` (or `pip install podclipper` after PyPI release).
+
 ```bash
-# Full pipeline, default config (shot-aware crop mode)
-python main.py path/to/video.mp4
+# Full pipeline, packaged default config (shot-aware crop mode)
+podclipper path/to/video.mp4
+# equivalent: python -m podclipper path/to/video.mp4
 
 # Common flags
-python main.py video.mp4 --output-dir outputs --max-clips 5 -v
+podclipper video.mp4 --llm-provider litellm --output-dir outputs --max-clips 5 -v
+
+# Override config (pass a FULL yaml — no partial merging)
+podclipper video.mp4 -c my-overrides.yaml
 
 # Force legacy single-crop path
-# (edit cfg.crop.mode to "single" in config, or copy + override)
+# (set cfg.crop.mode to "single" in your override config)
 
 # Re-render reels from cache, optionally filtered to a previous run's sidecars
-python regen_crops.py .cache/<video>-<hash> outputs/regen_run [outputs/<orig>]
+python dev/regen_crops.py .cache/<video>-<hash> outputs/regen_run [outputs/<orig>]
 
-# Standalone debug (kept at root — active tools)
-python debug_detect_clip.py outputs/segment.mp4         # YOLO + face overlay
-python diag_frame.py path/to/segment.mp4 1380 40        # per-frame bbox/cluster dump
+# Standalone debug (under dev/ — not installed with the package)
+python dev/debug_detect_clip.py outputs/segment.mp4         # YOLO + face overlay
+python dev/diag_frame.py path/to/segment.mp4 1380 40        # per-frame bbox/cluster dump
 
 # One-off experiments (moved under experiments/; results encoded in
 # this doc — re-run only if a hypothesis comes back)
-python experiments/stacked_crop_test.py path/to/video.mp4   # shot-aware prototype (now in src/crop.py)
+python experiments/stacked_crop_test.py path/to/video.mp4   # shot-aware prototype (now in src/podclipper/crop.py)
 python experiments/diarize_compare.py audio.wav             # pyannote vs Resemblyzer — both lost
 python experiments/mouth_speaker_test.py video.mp4          # mouth-motion speaker ID — negative result
 python experiments/highlight_faces.py in.mp4 out.mp4        # MediaPipe face-bbox overlay utility
@@ -216,12 +224,12 @@ problem by showing both people whenever the source goes wide.
 
 | Symptom | Likely file(s) |
 |---|---|
-| Wrong clip selected | `prompts/reel_detector.txt`, `src/analyze.py` |
-| Wrong person being cropped | `src/detect.py` (face attribution), `src/timeline.py` (shot classifier) |
-| Vibrating / jumpy stacked panel | `src/crop.py` (`smart_crop_916_stacked`) — tweak `stacked_iou_threshold` / `stacked_transition_frames` |
-| Crop misses head | `src/crop.py` (`_bbox_from_pose_anchors`) — tweak the 1.5/3.5 head-height multipliers |
-| Subtitles look off | `src/subtitles.py`, `config.subtitles.*` |
-| Reel marked skip | `src/evaluate.py`, sidecar `.txt` has the LLM's full feedback |
+| Wrong clip selected | `prompts/reel_detector.txt`, `src/podclipper/analyze.py` |
+| Wrong person being cropped | `src/podclipper/detect.py` (face attribution), `src/podclipper/timeline.py` (shot classifier) |
+| Vibrating / jumpy stacked panel | `src/podclipper/crop.py` (`smart_crop_916_stacked`) — tweak `stacked_iou_threshold` / `stacked_transition_frames` |
+| Crop misses head | `src/podclipper/crop.py` (`_bbox_from_pose_anchors`) — tweak the 1.5/3.5 head-height multipliers |
+| Subtitles look off | `src/podclipper/subtitles.py`, `config.subtitles.*` |
+| Reel marked skip | `src/podclipper/evaluate.py`, sidecar `.txt` has the LLM's full feedback |
 | Pipeline times out at LLM | `cfg.llm.claude_cli.timeout_seconds` |
 | HF / pyannote errors | only relevant in `crop.mode = single` + diarize.enabled |
 

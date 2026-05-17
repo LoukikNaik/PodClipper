@@ -64,28 +64,50 @@ Video
 
 ## Setup
 
-Requires Python 3.10+ and `ffmpeg` + `ffprobe` on PATH.
+Requires Python `>=3.10,<3.13` (mediapipe wheel constraint) and `ffmpeg` + `ffprobe` on PATH.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install podclipper                  # from PyPI (once published)
+# — or, for local development —
+pip install -e .                        # editable install from a clone
 ```
+
+This installs the `podclipper` console command and pulls in every runtime dep (whisper, ultralytics, mediapipe, opencv, litellm, ...).
 
 ### LLM provider
 
 Pick one via `config/default.yaml` or `--llm-provider`:
 
-- **Claude CLI** (default) — install Claude Code so the `claude` binary is on PATH.
-- **Anthropic API** — set `ANTHROPIC_API_KEY` in your environment.
+- **Claude CLI** (default) — install Claude Code so the `claude` binary is on PATH. No API key needed.
+- **LiteLLM gateway** — routes to any vendor (Anthropic / OpenAI / Gemini / Groq / Ollama / ...) or any OpenAI-compatible proxy (TokenRouter / OpenRouter / vLLM / ...) via a single `model: <vendor>/<model>` string. Set the matching API key in `.env`.
+
+Example `config/default.yaml` LiteLLM block:
+
+```yaml
+llm:
+  provider: litellm
+  model: anthropic/claude-sonnet-4-5      # or openai/gpt-5-mini, ollama/llama3, etc.
+  litellm:
+    api_base: null                        # set for gateways: https://api.tokenrouter.com/v1
+    api_key_env: null                     # null → litellm picks by model prefix
+                                          # (anthropic/ → ANTHROPIC_API_KEY, openai/ → OPENAI_API_KEY)
+    timeout_seconds: 900
+    num_retries: 2
+```
 
 ### Optional: speaker diarization
 
 For single-camera interview footage where the editor didn't cut between speakers, enable pyannote-driven follow-the-speaker:
 
+```bash
+pip install 'podclipper[diarize]'        # adds pyannote.audio + torch (~5 GB)
+```
+
 1. Accept terms at [huggingface.co/pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1).
-2. Add `HF_TOKEN=hf_xxx` to a `.env` file in the repo root (see `.env.example`).
-3. `diarize.enabled: true` in `config/default.yaml`.
+2. Add `HF_TOKEN=hf_xxx` to a `.env` file in your working directory (see `.env.example`).
+3. Set `crop.mode: single` AND `diarize.enabled: true` in your config.
 
 The pipeline runs without it — it just won't follow speaker turns visually in single-cam edits.
 
@@ -99,13 +121,17 @@ The pipeline runs without it — it just won't follow speaker turns visually in 
 ## Usage
 
 ```bash
-python main.py path/to/video.mp4
+podclipper path/to/video.mp4
+# equivalent (no install needed if you just cloned the repo):
+python -m podclipper path/to/video.mp4
 ```
 
 Common flags:
 
 ```bash
-python main.py video.mp4 \
+podclipper video.mp4 \
+  --llm-provider litellm \
+  -c my-overrides.yaml \
   --output-dir outputs/my-reels \
   --language en \
   --max-clips 5 \
@@ -114,7 +140,9 @@ python main.py video.mp4 \
   -v
 ```
 
-Run `python main.py --help` for the full list.
+Run `podclipper --help` for the full list.
+
+By default (no `-c`), the packaged `default.yaml` is used. Pass `-c your-overrides.yaml` to point at a custom config file (it must be the full config, not a partial override).
 
 Outputs land in `outputs/<timestamp>/reel_NN_<slugified-title>.mp4` alongside a `.txt` sidecar with the LLM's reasoning, source timestamps, and the LLM-judge scorecard.
 
@@ -123,14 +151,25 @@ Outputs land in `outputs/<timestamp>/reel_NN_<slugified-title>.mp4` alongside a 
 If you've already run the full pipeline and just want to re-render reels with updated detect / timeline / crop logic (without re-running Whisper or the LLM):
 
 ```bash
-python regen_crops.py .cache/<video_stem>-<hash> outputs/regen_run sidecar_dir/
+python dev/regen_crops.py .cache/<video_stem>-<hash> outputs/regen_run sidecar_dir/
 ```
 
-This reuses cached `segment.mp4` and `words.json` and only re-runs detect + timeline + crop + subtitle burn.
+This reuses cached `segment.mp4` and `words.json` and only re-runs detect + timeline + crop + subtitle burn. (Lives under `dev/` because it's a development tool, not part of the installed package.)
 
 ## Configuration
 
-Everything is knob-tunable in `config/default.yaml`:
+The packaged `default.yaml` ships with sensible defaults. To customize, copy it out and pass with `-c`:
+
+```bash
+podclipper --help                                # confirms install
+python -c "from podclipper.config import load_default_config, ns_to_dict; \
+           import yaml; \
+           print(yaml.safe_dump(ns_to_dict(load_default_config())))" > my-overrides.yaml
+# edit my-overrides.yaml, then
+podclipper video.mp4 -c my-overrides.yaml
+```
+
+Useful knobs:
 
 - `transcribe.first_pass.model` / `second_pass.model` — Whisper model sizes
 - `analyze.min/max_clip_seconds`, `target_clips` — clip length and count hints to the LLM
@@ -160,20 +199,37 @@ Re-running reuses these — fast iteration on subtitles, prompt or crop. Pass `-
 ## Project layout
 
 ```
-config/default.yaml
-prompts/reel_detector.txt     # LLM system prompt (editable)
-main.py                       # CLI entry point
-src/
-  config.py   logging_util.py  types.py
-  ingest.py   audio.py         transcribe.py
-  llm/base.py llm/claude_cli.py llm/litellm_provider.py
-  analyze.py
-  detect.py   timeline.py      crop.py
-  diarize.py  subtitles.py     transcribe_cleanup.py
-  evaluate.py pipeline.py
-landing/                      # Vite + React landing page
-.github/workflows/            # GH Pages deploy for the landing
-docs/demos/                   # README GIFs
+pyproject.toml                  # PEP 621 metadata, deps, console entry point
+src/podclipper/                 # the installable package
+  __init__.py    __main__.py    # `python -m podclipper`
+  main.py                       # CLI entry point (`podclipper = "podclipper.main:main"`)
+  config/
+    __init__.py                 # load_config + load_default_config (importlib.resources)
+    default.yaml                # bundled defaults — used when no -c is passed
+  prompts/
+    __init__.py                 # load_prompt(name)
+    reel_detector.txt           reel_refiner.txt
+    trailer_picks.txt           trailer_refiner.txt           trailer_evaluator.txt
+  llm/
+    base.py                     # LLMProvider Protocol + LLMError
+    claude_cli.py               # subprocess to `claude -p`
+    litellm_provider.py         # unified gateway: Anthropic / OpenAI / Gemini / ...
+  ingest.py    audio.py         transcribe.py     transcribe_cleanup.py
+  analyze.py   trailer.py
+  detect.py    timeline.py      crop.py           diarize.py
+  subtitles.py evaluate.py      pipeline.py
+  logging_util.py  types.py
+
+dev/                            # dev/debug scripts (NOT installed)
+  regen_crops.py  debug_detect_clip.py  diag_frame.py  post_via_instagrapi.py
+
+tests/unit/                     # 192 characterization tests
+
+landing/                        # Vite + React landing page (ships separately)
+.github/workflows/
+  publish-pypi.yml              # tag-triggered PyPI release via Trusted Publisher
+  deploy-landing.yml            # GH Pages deploy for landing/
+docs/demos/                     # README GIFs
 ```
 
 ## Deployment
