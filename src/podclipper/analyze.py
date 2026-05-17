@@ -15,7 +15,7 @@ from .types import Clip, Transcript, TranscriptSegment, Word
 
 log = logging.getLogger("ave.analyze")
 
-_PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "reel_detector.txt"
+from .prompts import load_prompt
 
 
 class AnalyzeError(Exception):
@@ -23,7 +23,7 @@ class AnalyzeError(Exception):
 
 
 def _load_prompt(min_s: int, max_s: int, target: int) -> str:
-    template = _PROMPT_TEMPLATE_PATH.read_text()
+    template = load_prompt("reel_detector.txt")
     return (
         template
         .replace("{{MIN}}", str(min_s))
@@ -162,13 +162,8 @@ def _snap_to_segment_boundaries(
     return start, end
 
 
-_REEL_REFINER_PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "prompts" / "reel_refiner.txt"
-)
-
-
 def _load_reel_refiner_prompt() -> str:
-    return _REEL_REFINER_PROMPT_PATH.read_text(encoding="utf-8")
+    return load_prompt("reel_refiner.txt")
 
 
 _REEL_REFINE_USER_TEMPLATE = """\

@@ -408,10 +408,8 @@ def evaluate_trailer(
     if eval_cfg is not None and not bool(getattr(eval_cfg, "enabled", True)):
         return TrailerScorecard(verdict="review", feedback="evaluation disabled")
 
-    system_prompt = (
-        Path(__file__).resolve().parent.parent.parent
-        / "prompts" / "trailer_evaluator.txt"
-    ).read_text(encoding="utf-8")
+    from .prompts import load_prompt
+    system_prompt = load_prompt("trailer_evaluator.txt")
 
     picks_payload = []
     for i, p in enumerate(picks, 1):

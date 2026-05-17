@@ -34,11 +34,7 @@ def _t_get(cfg: SimpleNamespace, key: str, default):
     return getattr(tcfg, key, default)
 
 
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
-
-
-def _load_prompt(name: str) -> str:
-    return (_PROMPTS_DIR / name).read_text(encoding="utf-8")
+from .prompts import load_prompt as _load_prompt
 
 
 def _extract_json_array(raw: str) -> list[dict]:
