@@ -41,7 +41,7 @@ from podclipper.pipeline import run_pipeline, run_trailer_pipeline  # noqa: E402
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="agentic-video-editor",
+        prog="podclipper",
         description="Turn a long video into vertical 9:16 reels with smart cropping and subtitles.",
     )
     p.add_argument("input", type=Path, help="Path to input video file")

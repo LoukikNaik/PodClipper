@@ -31,7 +31,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from main import _load_dotenv, apply_cli_overrides, build_parser, main
+from podclipper.main import _load_dotenv, apply_cli_overrides, build_parser, main
 
 
 # --------------------------------------------------------------------------- #
