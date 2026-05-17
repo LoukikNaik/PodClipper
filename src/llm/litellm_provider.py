@@ -24,5 +24,9 @@ class LiteLLMProvider:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
 
-        response = litellm.completion(model=self.model, messages=messages)
+        response = litellm.completion(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens,
+        )
         return response.choices[0].message.content

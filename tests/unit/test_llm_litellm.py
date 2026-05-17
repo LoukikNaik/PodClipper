@@ -105,3 +105,20 @@ def test_complete_prepends_system_prompt_as_system_message_when_provided(
         {"role": "system", "content": "be brief"},
         {"role": "user", "content": "the question"},
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.6 — max_tokens forwarded to litellm
+# --------------------------------------------------------------------------- #
+
+def test_complete_forwards_max_tokens_kwarg_to_litellm(mocker) -> None:
+    """max_tokens passed to complete() is forwarded to litellm.completion."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "ok")
+    provider = LiteLLMProvider(SimpleNamespace(), model="anthropic/claude-x")
+
+    provider.complete("hi", max_tokens=1234)
+
+    assert mock_completion.call_args.kwargs["max_tokens"] == 1234
