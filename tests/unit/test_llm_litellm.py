@@ -176,3 +176,22 @@ def test_complete_forwards_api_base_when_set_in_cfg(mocker) -> None:
     provider.complete("hi")
 
     assert mock_completion.call_args.kwargs["api_base"] == "http://localhost:11434"
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.10 — timeout forwarded from cfg
+# --------------------------------------------------------------------------- #
+
+def test_complete_forwards_timeout_seconds_from_cfg(mocker) -> None:
+    """cfg.timeout_seconds → timeout= kwarg on litellm.completion."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "ok")
+    provider = LiteLLMProvider(
+        SimpleNamespace(timeout_seconds=42), model="anthropic/claude-x",
+    )
+
+    provider.complete("hi")
+
+    assert mock_completion.call_args.kwargs["timeout"] == 42
