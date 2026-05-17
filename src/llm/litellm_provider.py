@@ -19,5 +19,5 @@ class LiteLLMProvider:
     ) -> str:
         import litellm
 
-        response = litellm.completion()
+        response = litellm.completion(model=self.model)
         return response.choices[0].message.content
