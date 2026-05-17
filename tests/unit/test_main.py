@@ -216,19 +216,15 @@ def test_parser_mode_choices_are_reels_and_trailer_only() -> None:
         parser.parse_args(["video.mp4", "--mode", "invalid_mode"])
 
 
-def test_parser_llm_provider_choices_are_claude_cli_and_anthropic_api() -> None:
-    """`--llm-provider` choices are currently {claude_cli, anthropic_api}.
-
-    This test must be updated in Phase 1 when we drop `anthropic_api` and
-    add `litellm` — failure here will signal the change is needed.
-    """
+def test_parser_llm_provider_choices_are_claude_cli_and_litellm() -> None:
+    """`--llm-provider` choices are {claude_cli, litellm} after Phase 1."""
     parser = build_parser()
 
     parser.parse_args(["video.mp4", "--llm-provider", "claude_cli"])
-    parser.parse_args(["video.mp4", "--llm-provider", "anthropic_api"])
+    parser.parse_args(["video.mp4", "--llm-provider", "litellm"])
 
     with pytest.raises(SystemExit):
-        parser.parse_args(["video.mp4", "--llm-provider", "litellm"])
+        parser.parse_args(["video.mp4", "--llm-provider", "anthropic_api"])
 
 
 # --------------------------------------------------------------------------- #
@@ -301,14 +297,14 @@ def test_apply_cli_overrides_sets_transcribe_language() -> None:
 
 
 def test_apply_cli_overrides_sets_llm_provider() -> None:
-    """`--llm-provider anthropic_api` → `cfg.llm.provider = 'anthropic_api'`."""
+    """`--llm-provider litellm` → `cfg.llm.provider = 'litellm'`."""
     cfg = _make_minimal_cfg()
     args = _make_default_args()
-    args.llm_provider = "anthropic_api"
+    args.llm_provider = "litellm"
 
     apply_cli_overrides(cfg, args)
 
-    assert cfg.llm.provider == "anthropic_api"
+    assert cfg.llm.provider == "litellm"
 
 
 def test_apply_cli_overrides_sets_max_clips_via_analyze_target_clips() -> None:

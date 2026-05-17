@@ -68,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force Whisper language (e.g. 'en', 'hi'). Default: auto-detect",
     )
     p.add_argument(
-        "--llm-provider", choices=["claude_cli", "anthropic_api"], default=None,
+        "--llm-provider", choices=["claude_cli", "litellm"], default=None,
         help="Override config.llm.provider",
     )
     p.add_argument(
