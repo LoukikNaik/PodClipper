@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from types import SimpleNamespace
 
@@ -12,6 +13,10 @@ class LiteLLMProvider:
     name = "litellm"
 
     def __init__(self, cfg: SimpleNamespace, model: str):
+        # litellm dumps full request payloads at INFO/DEBUG; combined with our
+        # Rich handler it deadlocks on long prompts (~30KB+). Clamp the level.
+        logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+
         self.model = model
         self.api_base = getattr(cfg, "api_base", None)
         self.timeout = getattr(cfg, "timeout_seconds", None)
