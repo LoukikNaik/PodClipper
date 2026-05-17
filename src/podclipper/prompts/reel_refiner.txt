@@ -1,81 +1,114 @@
-You refine the START and END boundaries of a pre-selected reel clip,
-using word-precise transcript data.
+You refine the EXACT word-level START and END of a pre-selected reel
+clip so it plays as ONE complete idea that delivers the title.
 
-You are given:
-  - The clip's TITLE (the hook it's selling)
-  - The clip's CURRENT rough start/end timestamps
-  - A WORD-BY-WORD list with the words IN the clip, plus ~10s of context
-    BEFORE the clip start and ~10s AFTER the clip end. Each word has an
-    INDEX you will refer back to.
+You receive:
+  - TITLE — the hook the clip is selling.
+  - Current rough start/end timestamps (in seconds).
+  - A WORD list with the words IN the clip plus ~10s of CONTEXT before
+    and after. Each word has an integer INDEX.
 
-Your job: choose the EXACT first word index and last word index so the
-clip plays as ONE complete idea — landing the hook fast at the start,
-and resolving the thought cleanly at the end with NO trailing fragments
-of a new idea.
+You return a single JSON object: {"first_word_idx": <int>, "last_word_idx": <int>}.
 
-THE END BOUNDARY IS THE LOAD-BEARING ONE. Most failures look like:
+Work through these four steps **in order**. Skipping a step is how
+clips fail.
 
-  - The clip's last few words are a sponsor/show tag the LLM picked up:
-    "Welcome to the Huberman Lab Podcast", "And we'll be right back",
-    "Thanks for listening". CUT these out. ALWAYS.
+================================================================
+STEP 1 — Pick the LAST WORD (most failures happen here)
+================================================================
 
-  - The clip's last words begin a NEW topic or example:
-    "Now another really good example of this is...",
-    "And so something else that happens is...",
-    "But then there's this whole other category of...".
-    These are lead-ins to the next chunk. CUT them out — end on the
-    PREVIOUS complete sentence.
+The last word MUST satisfy ALL of these:
 
-  - The clip ends mid-clause with a dangling conjunction:
-    "And so something –", "but the thing is –", "because of which".
-    NEVER end on a hanging "and", "but", "so", "because", "or", "that",
-    "which", "if", "when", "while". Back up to the previous full
-    sentence end.
+  (a) It ends a COMPLETE sentence (punctuation `.`, `!`, or `?` —
+      Whisper sometimes omits these but you can tell from context).
+  (b) It is NOT any of these continuation tokens:
+        and · but · so · because · or · that · which · if · when ·
+        while · though · since · as · for · also · plus · then ·
+        actually · basically · like · really · just · maybe · I mean
+      If your candidate last word is one of these, BACK UP to the
+      previous full sentence-ending word.
+  (c) The sentence completes a THOUGHT — not a sub-clause of a
+      bigger one. Example failure: "It's almost a, it's a." That's
+      a self-correcting hesitation, not a complete thought. Back up
+      to the previous real sentence.
+  (d) The word immediately AFTER your chosen end either:
+        - starts a NEW topic ("Another thing is...", "Now let's talk
+          about...", "So that's why I think..."), OR
+        - is a sponsor/outro/tag ("Welcome back to...", "Subscribe...",
+          "And we'll be right back..."), OR
+        - is a brief silence / Whisper segment break.
+      If the next word CONTINUES the current thought ("and because of
+      that...", "which means...", "the way this works is..."), your
+      end is too early — extend forward by one sentence and re-check.
 
-  - The speaker pauses briefly then DELIVERS the actual payoff after
-    the current end. Whisper put a pause-based segment break there and
-    the LLM cut right before the payoff. EXTEND past that pause to
-    include the payoff sentence.
+Concrete failure modes to actively avoid (from real prior runs):
 
-START boundary problems to fix:
+  - "...it's almost a, it's a." → hesitation, not a sentence. BACK UP.
+  - "...so this is what happens with —" → dangling conjunction. BACK UP.
+  - "...give them an exogenous ketone supplement." [next: "And the
+    ketones go to the brain and..."] → next sentence continues the
+    explanation. EXTEND FORWARD one sentence.
 
-  - Throat-clearing setup ("So I remember, this is a really good
-    example of...", "Okay so, like, here's the thing..."). SKIP this
-    and start ON the hook sentence.
+================================================================
+STEP 2 — Pick the FIRST WORD
+================================================================
 
-  - Pronoun-led starts that reference unstated prior context
-    ("And that's why I think..."). Either start at the prior sentence
-    where the speaker SETS UP the subject, or start AFTER the pronoun
-    on the next standalone-readable sentence.
+The first word MUST satisfy ALL of these:
 
-  - Show intros / sponsor tags dropped into the same opener
-    ("Welcome to the Huberman Lab Podcast. Today we're going to talk
-    about..."). Always skip past the show intro to where the actual
-    content starts.
+  (a) It begins a sentence a STRANGER can understand WITHOUT any
+      prior context.
+  (b) It is NOT a pronoun whose referent only exists earlier in the
+      podcast ("he said", "she did", "they realized", "it was", "this
+      is", "that's"). If the sentence opens with one of these, either
+      back up to the prior sentence that names the subject, OR move
+      forward to the next standalone-readable sentence.
+  (c) It is NOT a continuation conjunction (and · but · so · because ·
+      or · also · plus · then). These are mid-thought connectors.
+  (d) It is NOT a mid-explanation fragment ("give them an X
+      supplement", "say Alzheimer's") — these are answers to a
+      question that wasn't asked yet. Back up to the question/setup
+      sentence.
+  (e) Throat-clearing ("Okay so, like, I remember once...", "You know,
+      I was just saying...") gets STRIPPED — start ON the actual hook
+      sentence.
 
-Decision rules:
+================================================================
+STEP 3 — Verify the TITLE is delivered (HARD STOP)
+================================================================
 
-  1. The clip's TITLE is the promise — every cut decision should serve
-     landing that promise. Lean toward keeping content that DELIVERS
-     the title; aggressively drop content that doesn't.
+Re-read the title. Identify the SPECIFIC noun, number, or claim in
+the title (e.g. "10,000kg gold bell", "#1 fuel", "4 minutes
+changed").
 
-  2. Pick from the word indices provided. Use ONLY indices that
-     appear in the list. Do not invent words or extrapolate past the
-     end of the list.
+Then scan the words from first_word_idx to last_word_idx INCLUSIVE.
+The specific claim from the title MUST be present, verbatim or near-
+verbatim, somewhere in that range.
 
-  3. The result is a single contiguous range: every word from
-     first_word_idx through last_word_idx (inclusive) will be in the
-     clip. The clip should still be roughly 15-100 seconds long.
+If the title's specific claim is NOT in the range:
+  - Expand the range to include the line where it IS spoken (within
+    your overall length budget), OR
+  - If the claim is truly outside the available words, you cannot
+    refine this clip well. Return your best [first, last] bounds
+    anyway but lean toward the most title-aligned section.
 
-  4. last_word_idx MUST be the index of a word that ends a COMPLETE
-     SENTENCE. Check the word: does it have a period, question mark,
-     or exclamation point implied? If the last word is "and", "but",
-     "so", "because", or any continuation token, you have picked
-     wrong — back up to the previous sentence-ending word.
+Example: title "The #1 Fuel Your Brain Is Missing" — the words
+"fuel", "missing", or an equivalent reveal (e.g. "ketones",
+"lactate") MUST appear in the chosen range. If the chosen range only
+sets up the problem and never names the fuel, you have failed step 3.
 
-  5. Both bounds together must produce a clip that is COMPLETE on its
-     own — a stranger encountering the clip cold should hear: setup →
-     development → payoff, with no dangling fragments at either end.
+================================================================
+STEP 4 — Length & contiguity sanity
+================================================================
 
-Output ONLY a single JSON object on one line, no prose, no markdown:
-  {"first_word_idx": <int>, "last_word_idx": <int>}
+  - last_word_idx > first_word_idx.
+  - Both must appear in the provided word list (no inventing indices).
+  - The resulting clip should be roughly 15–100 seconds.
+  - If you cannot satisfy steps 1–3 inside that budget, pick the
+    boundaries that satisfy steps 1 and 2 strictly, even if step 3
+    is imperfect. NEVER violate step 1 to chase step 3.
+
+================================================================
+OUTPUT (and nothing else — no prose, no markdown, no code fence)
+================================================================
+
+A single JSON object on one line:
+{"first_word_idx": <int>, "last_word_idx": <int>}
