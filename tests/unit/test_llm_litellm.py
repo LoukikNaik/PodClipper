@@ -64,3 +64,22 @@ def test_complete_passes_configured_model_string_to_litellm(mocker) -> None:
     provider.complete("hi")
 
     assert mock_completion.call_args.kwargs["model"] == "openai/gpt-5-mini"
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.4 — wrap user prompt as messages=[{role:user,content:...}]
+# --------------------------------------------------------------------------- #
+
+def test_complete_wraps_user_prompt_in_user_role_message(mocker) -> None:
+    """With no system_prompt, messages contains exactly one user-role entry."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "ok")
+    provider = LiteLLMProvider(SimpleNamespace(), model="anthropic/claude-x")
+
+    provider.complete("hello?")
+
+    assert mock_completion.call_args.kwargs["messages"] == [
+        {"role": "user", "content": "hello?"},
+    ]

@@ -19,5 +19,8 @@ class LiteLLMProvider:
     ) -> str:
         import litellm
 
-        response = litellm.completion(model=self.model)
+        response = litellm.completion(
+            model=self.model,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
         return response.choices[0].message.content
