@@ -13,6 +13,7 @@ class LiteLLMProvider:
     def __init__(self, cfg: SimpleNamespace, model: str):
         self.model = model
         self.api_base = getattr(cfg, "api_base", None)
+        self.timeout = getattr(cfg, "timeout_seconds", None)
 
     def complete(
         self,
@@ -34,6 +35,8 @@ class LiteLLMProvider:
         }
         if self.api_base:
             kwargs["api_base"] = self.api_base
+        if self.timeout is not None:
+            kwargs["timeout"] = self.timeout
 
         try:
             response = litellm.completion(**kwargs)
