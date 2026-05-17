@@ -195,3 +195,22 @@ def test_complete_forwards_timeout_seconds_from_cfg(mocker) -> None:
     provider.complete("hi")
 
     assert mock_completion.call_args.kwargs["timeout"] == 42
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.11 — num_retries forwarded from cfg
+# --------------------------------------------------------------------------- #
+
+def test_complete_forwards_num_retries_from_cfg(mocker) -> None:
+    """cfg.num_retries → num_retries= kwarg on litellm.completion."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "ok")
+    provider = LiteLLMProvider(
+        SimpleNamespace(num_retries=3), model="anthropic/claude-x",
+    )
+
+    provider.complete("hi")
+
+    assert mock_completion.call_args.kwargs["num_retries"] == 3
