@@ -67,6 +67,13 @@ Run BOTH tests on each candidate. If either fails → drop the clip.
   - If YES → your clip ends mid-explanation. Either extend to include that segment (if you fit in {{MAX}}s) or skip the clip.
   - If NO (it's a new topic, new question, or pure filler) → good, you ended at a real boundary.
 
+**Test 3 — "Title delivers" test (HARDEST — most clips fail here)**: write the title you would give this clip. Then read the chosen [start..end] window aloud. Does the window CONTAIN the specific claim in the title? The title's concrete noun/number/reveal must be a line (or near-verbatim line) inside the window. If the title promises "the #1 fuel your brain is missing" but the window only sets up the problem without ever naming the fuel — the clip FAILS this test. Either:
+  (a) extend the window to include the line where the title's claim is delivered (if still under {{MAX}}s), OR
+  (b) rewrite the title to match what the window actually delivers, OR
+  (c) skip the clip entirely.
+
+A title that over-promises is worse than no clip at all — viewers feel cheated.
+
 **Bad example you must avoid**:
   - Speaker says: "Three things matter most. First, courage. Second, persistence. Third, patience — the hardest of all to learn."
   - DO NOT pick a clip ending at "Second, persistence." The story isn't done.
@@ -96,6 +103,8 @@ Rules:
 ### Title (critical — this is what stops the scroll)
 
 The title is overlaid in bold at the top of the reel for the first 3 seconds. It must make a stranger stop scrolling INSTANTLY. Write it like the hook text on a viral TikTok or Instagram reel, NOT like an article headline.
+
+**Title-content contract (non-negotiable):** the specific noun, number, or reveal in the title MUST be present, verbatim or near-verbatim, INSIDE the chosen [start..end] window. If the title says "10,000kg bell of gold" the number AND the bell AND the gold must all be spoken in the clip. If the title says "The #1 fuel your brain is missing" the clip must actually name that fuel (ketones, lactate, glucose, whatever) — not just set up the question. A title that promises something the clip doesn't deliver scores worse than no clip at all.
 
 **Hard limit: 38 characters, 3–7 words.**
 
