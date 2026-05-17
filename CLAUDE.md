@@ -58,7 +58,7 @@ Source video
 | `src/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). |
 | `src/transcribe_cleanup.py` | LLM post-pass to fix Whisper mis-spellings / transliterate non-Latin. |
 | `src/analyze.py` | LLM clip selection — reads transcript, returns `Clip[]`. |
-| `src/llm/` | Provider abstraction. `claude_cli.py` (default, configurable timeout), `anthropic_api.py`. |
+| `src/llm/` | Provider abstraction. `claude_cli.py` (default, configurable timeout), `litellm_provider.py` (unified gateway: Anthropic, OpenAI, Gemini, Groq, Ollama, ...). |
 | `src/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |
 | `src/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the new shot-aware path. |
 | `src/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and new `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel). |
@@ -169,7 +169,11 @@ python experiments/highlight_faces.py in.mp4 out.mp4        # MediaPipe face-bbo
 Configured at `cfg.llm.provider`:
 - `claude_cli` (default) — shells out to `claude -p`. Needs Claude Code
   CLI on PATH. Timeout is `cfg.llm.claude_cli.timeout_seconds` (default 900).
-- `anthropic_api` — uses `ANTHROPIC_API_KEY` from `.env`.
+- `litellm` — unified SDK. Vendor is picked from `cfg.llm.model`
+  (`anthropic/claude-sonnet-4-5`, `openai/gpt-5-mini`, `ollama/llama3`,
+  `groq/llama-3-70b`, ...). API key env var follows LiteLLM's convention
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...). For local/self-hosted
+  models, set `cfg.llm.litellm.api_base`.
 
 ## Optional: speaker diarization (legacy single-mode only)
 

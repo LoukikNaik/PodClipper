@@ -166,7 +166,7 @@ main.py                       # CLI entry point
 src/
   config.py   logging_util.py  types.py
   ingest.py   audio.py         transcribe.py
-  llm/base.py llm/claude_cli.py llm/anthropic_api.py
+  llm/base.py llm/claude_cli.py llm/litellm_provider.py
   analyze.py
   detect.py   timeline.py      crop.py
   diarize.py  subtitles.py     transcribe_cleanup.py
