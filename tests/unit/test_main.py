@@ -184,7 +184,7 @@ def test_parser_exits_with_systemexit_when_no_input_path_given() -> None:
 
 
 def test_parser_defaults_match_documented_pipeline_defaults() -> None:
-    """Defaults: mode=reels, config=config/default.yaml, no overrides, no debug, no verbose.
+    """Defaults: mode=reels, no config (→ packaged default.yaml), no overrides.
 
     Locking these so a behavior change shows up as a one-line test diff.
     """
@@ -193,7 +193,7 @@ def test_parser_defaults_match_documented_pipeline_defaults() -> None:
 
     assert args.input == Path("video.mp4")
     assert args.mode == "reels"
-    assert args.config == Path("config/default.yaml")
+    assert args.config is None
     assert args.output_dir is None
     assert args.language is None
     assert args.llm_provider is None

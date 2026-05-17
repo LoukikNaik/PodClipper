@@ -34,7 +34,7 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
 # Load .env BEFORE importing modules that read env vars (e.g. src.llm).
 _load_dotenv()
 
-from podclipper.config import load_config  # noqa: E402
+from podclipper.config import load_config, load_default_config  # noqa: E402
 from podclipper.logging_util import setup_logging  # noqa: E402
 from podclipper.pipeline import run_pipeline, run_trailer_pipeline  # noqa: E402
 
@@ -56,8 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "-c", "--config", type=Path, default=Path("config/default.yaml"),
-        help="Path to YAML config (default: config/default.yaml)",
+        "-c", "--config", type=Path, default=None,
+        help="Path to YAML config (default: packaged default.yaml)",
     )
     p.add_argument(
         "-o", "--output-dir", type=Path, default=None,
@@ -127,11 +127,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: input video not found: {args.input}", file=sys.stderr)
         return 2
 
-    if not args.config.exists():
+    if args.config is None:
+        cfg = load_default_config()
+    elif not args.config.exists():
         print(f"error: config file not found: {args.config}", file=sys.stderr)
         return 2
-
-    cfg = load_config(args.config)
+    else:
+        cfg = load_config(args.config)
     apply_cli_overrides(cfg, args)
 
     log = setup_logging(cfg.logging.level)
