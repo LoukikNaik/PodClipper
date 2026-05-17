@@ -23,3 +23,27 @@ def test_init_sets_name_attribute_to_litellm_and_stores_model() -> None:
 
     assert provider.name == "litellm"
     assert provider.model == "anthropic/claude-sonnet-4-5"
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.2 — complete() returns content from litellm response
+# --------------------------------------------------------------------------- #
+
+def _make_litellm_response(mocker, content: str):
+    """Build a stand-in for litellm.ModelResponse with one choice."""
+    message = mocker.MagicMock(content=content)
+    choice = mocker.MagicMock(message=message)
+    return mocker.MagicMock(choices=[choice])
+
+
+def test_complete_returns_message_content_from_litellm_response(mocker) -> None:
+    """complete() returns response.choices[0].message.content unchanged."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "hello world")
+    provider = LiteLLMProvider(SimpleNamespace(), model="anthropic/claude-x")
+
+    result = provider.complete("anything")
+
+    assert result == "hello world"

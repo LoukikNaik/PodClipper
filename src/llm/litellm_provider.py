@@ -10,3 +10,14 @@ class LiteLLMProvider:
 
     def __init__(self, cfg: SimpleNamespace, model: str):
         self.model = model
+
+    def complete(
+        self,
+        user_prompt: str,
+        system_prompt: str = "",
+        max_tokens: int = 4096,
+    ) -> str:
+        import litellm
+
+        response = litellm.completion()
+        return response.choices[0].message.content
