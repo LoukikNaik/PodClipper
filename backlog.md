@@ -288,3 +288,97 @@ in pipeline.py, mirroring the structure of trailer mode.
 
 Multi-month effort. Not blocking. Listed here so the moving pieces are
 captured the moment someone wants to start it.
+
+## LiteLLM as the unified API provider (drop `anthropic_api`)
+
+**What:** Replace the in-tree `anthropic_api` provider with a `litellm`
+provider so any model on any vendor (OpenAI, Gemini, Groq, Bedrock, Ollama,
+…) is reachable via one config knob. LiteLLM speaks Anthropic natively
+via `anthropic/<model>` strings, so a separate native provider is redundant.
+
+**Scope:**
+
+- Add `src/llm/litellm_provider.py` implementing the `LLMProvider` Protocol.
+- Register `"litellm"` in `build_provider()`.
+- **Delete** `src/llm/anthropic_api.py` and its branch in `build_provider()`.
+- Update `--llm-provider` CLI choices: `{claude_cli, litellm}` (was
+  `{claude_cli, anthropic_api}`).
+- Three characterization tests in `tests/unit/` are time-bombed for this
+  change — they'll fail loudly when `anthropic_api` is removed, signaling
+  exactly what to update.
+
+**Config shape:**
+
+```yaml
+llm:
+  provider: litellm                          # or "claude_cli"
+  model: "anthropic/claude-sonnet-4-5"       # vendor/model — LiteLLM routes by prefix
+  max_tokens: 4096
+  temperature: 0.7
+  litellm:
+    api_key_env: ANTHROPIC_API_KEY
+    api_base: null                           # optional — set for Ollama/vLLM/proxies
+    timeout_seconds: 300
+    num_retries: 2
+  claude_cli:                                # unchanged
+    timeout_seconds: 900
+```
+
+**One model for everything for now.** Per-task overrides
+(`llm.analyze.model`, `llm.evaluate.model`) are explicitly deferred to a
+follow-up.
+
+**Survivors:** `claude_cli` provider stays as the no-API-key default for
+users with a Claude Code subscription.
+
+**Mocking strategy:** unit tests mock `litellm.completion` at the SDK
+boundary. No real API calls in the test suite. One optional integration
+test gated behind `RUN_INTEGRATION=1` can be added later if needed.
+
+**Method:** strict TDD — Phase 0 characterization tests are the safety net
+that proves `claude_cli` parity through the swap.
+
+## PyPI package conversion (pip + uv)
+
+**What:** Ship the pipeline as `pip install podclipper` so users on macOS
+and Linux can install + run without cloning the repo. Both pip and uv
+read the same `pyproject.toml`, so supporting both is one configuration.
+
+**Scope:**
+
+- Move source under `src/podclipper/` (rename current `src/` →
+  `src/podclipper/`); update all `from src.X import …` → `from podclipper.X`.
+- Add `pyproject.toml` (PEP 621). Python `>=3.10,<3.13` (mediapipe wheel
+  constraint).
+- Bundle `config/default.yaml` and `prompts/` as package data via
+  `importlib.resources`.
+- One console entry point only: `podclipper = "podclipper.main:main"`.
+- Move `regen_crops.py` and `debug_detect_clip.py` to `dev/` — debugging
+  tools, not user-facing features, so they don't go on user PATH.
+- GitHub Action publishes to PyPI on git tag using
+  `pypa/gh-action-pypi-publish`.
+
+**Extras (heavy deps opt-in, core install stays lean):**
+
+```toml
+[project.optional-dependencies]
+diarize = ["pyannote.audio>=3.1", "torch>=2.0"]   # legacy single-mode only
+llm     = ["litellm>=1.50"]                       # if not core
+```
+
+`mediapipe` and `ultralytics` stay in core — required for the default
+shot-aware crop path.
+
+**Out of scope:** Docker image, conda package, Windows native build.
+
+**Method:** TDD where the surface is pure (entry-point dispatch, package-
+data discovery via `importlib.resources`); smoke tests + manual venv
+install verification for the rest.
+
+**Execution order overall:**
+
+1. Phase 0 — characterization test suite (DONE).
+2. Manual smoke: run pipeline on a known video, confirm output unchanged.
+3. Phase 1 — LiteLLM swap (TDD; safety net is Phase 0).
+4. Manual smoke: rerun with `provider: litellm`, confirm parity.
+5. Phase 2 — package conversion (TDD where pure, smoke for the rest).
