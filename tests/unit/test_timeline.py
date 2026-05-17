@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.timeline import (
+from podclipper.timeline import (
     _cluster_persistence,
     _cluster_x_centers,
     _longest_contiguous_run,
@@ -26,7 +26,7 @@ from src.timeline import (
     build_speaker_timeline,
     classify_wide_shot_frames,
 )
-from src.types import BBox, TimelineSegment
+from podclipper.types import BBox, TimelineSegment
 
 
 # --------------------------------------------------------------------------- #

@@ -23,9 +23,9 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.config import load_config
-from src.llm import LLMError, build_provider
-from src.logging_util import setup_logging
+from podclipper.config import load_config
+from podclipper.llm import LLMError, build_provider
+from podclipper.logging_util import setup_logging
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent

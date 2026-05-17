@@ -11,17 +11,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.config import load_config
-from src.crop import smart_crop_916, smart_crop_916_stacked
-from src.detect import detect_humans_per_frame, detect_humans_all_per_frame
-from src.logging_util import setup_logging
-from src.subtitles import burn_subtitles
-from src.timeline import (
+from podclipper.config import load_config
+from podclipper.crop import smart_crop_916, smart_crop_916_stacked
+from podclipper.detect import detect_humans_per_frame, detect_humans_all_per_frame
+from podclipper.logging_util import setup_logging
+from podclipper.subtitles import burn_subtitles
+from podclipper.timeline import (
     apply_min_dwell,
     build_speaker_timeline,
     classify_wide_shot_frames,
 )
-from src.transcribe import transcribe_second_pass_cached
+from podclipper.transcribe import transcribe_second_pass_cached
 
 
 def _title_from_sidecar(path: Path) -> str:

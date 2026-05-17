@@ -31,7 +31,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.config import load_config, ns_to_dict
+from podclipper.config import load_config, ns_to_dict
 
 
 # --------------------------------------------------------------------------- #

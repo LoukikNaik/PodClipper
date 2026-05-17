@@ -7,9 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.config import load_config
-from src.detect import detect_humans_per_frame
-from src.logging_util import setup_logging
+from podclipper.config import load_config
+from podclipper.detect import detect_humans_per_frame
+from podclipper.logging_util import setup_logging
 
 
 def main() -> int:

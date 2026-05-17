@@ -34,9 +34,9 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
 # Load .env BEFORE importing modules that read env vars (e.g. src.llm).
 _load_dotenv()
 
-from src.config import load_config  # noqa: E402
-from src.logging_util import setup_logging  # noqa: E402
-from src.pipeline import run_pipeline, run_trailer_pipeline  # noqa: E402
+from podclipper.config import load_config  # noqa: E402
+from podclipper.logging_util import setup_logging  # noqa: E402
+from podclipper.pipeline import run_pipeline, run_trailer_pipeline  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.trailer import (
+from podclipper.trailer import (
     _extract_json_array,
     _extract_json_object,
     _fmt_transcript_for_llm,
@@ -34,7 +34,7 @@ from src.trailer import (
     derive_cut_bounds,
     pick_quotables,
 )
-from src.types import Transcript, TranscriptSegment, Word
+from podclipper.types import Transcript, TranscriptSegment, Word
 
 
 # --------------------------------------------------------------------------- #

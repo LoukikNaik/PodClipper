@@ -34,7 +34,7 @@ def _t_get(cfg: SimpleNamespace, key: str, default):
     return getattr(tcfg, key, default)
 
 
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
 
 def _load_prompt(name: str) -> str:

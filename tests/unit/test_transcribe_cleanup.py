@@ -17,9 +17,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.llm import LLMError
-from src.transcribe_cleanup import CleanupError, _extract_json_array, cleanup_words
-from src.types import Word
+from podclipper.llm import LLMError
+from podclipper.transcribe_cleanup import CleanupError, _extract_json_array, cleanup_words
+from podclipper.types import Word
 
 
 # --------------------------------------------------------------------------- #

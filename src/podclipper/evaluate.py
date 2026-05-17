@@ -409,7 +409,7 @@ def evaluate_trailer(
         return TrailerScorecard(verdict="review", feedback="evaluation disabled")
 
     system_prompt = (
-        Path(__file__).resolve().parent.parent
+        Path(__file__).resolve().parent.parent.parent
         / "prompts" / "trailer_evaluator.txt"
     ).read_text(encoding="utf-8")
 
