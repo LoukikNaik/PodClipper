@@ -241,3 +241,26 @@ def test_complete_forwards_api_key_from_configured_env_var(
     provider.complete("hi")
 
     assert mock_completion.call_args.kwargs["api_key"] == "tr-sekret"
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.17 — silence litellm's chatty internal logger
+# --------------------------------------------------------------------------- #
+
+def test_init_raises_litellm_internal_logger_to_warning() -> None:
+    """LiteLLMProvider() init silences the noisy 'LiteLLM' logger.
+
+    Critical: when our root logger is DEBUG (e.g. -v flag), litellm dumps
+    full request payloads through its 'LiteLLM' logger. Combined with our
+    Rich handler this can deadlock on long prompts (~30KB+ messages).
+    Locking the level prevents that footgun.
+    """
+    import logging
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    # set it low to prove init actively raises it
+    logging.getLogger("LiteLLM").setLevel(logging.DEBUG)
+
+    LiteLLMProvider(SimpleNamespace(), model="anthropic/x")
+
+    assert logging.getLogger("LiteLLM").level >= logging.WARNING
