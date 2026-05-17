@@ -381,3 +381,27 @@ def test_main_returns_2_when_config_file_does_not_exist(
     assert rc == 2
     captured = capsys.readouterr()
     assert "config file not found" in captured.err
+
+
+def test_main_with_no_config_flag_dispatches_to_load_default_config(
+    tmp_path: Path, mocker,
+) -> None:
+    """No -c flag → main() calls load_default_config() (NOT load_config) and runs the pipeline.
+
+    Guards the install-time happy path: `podclipper video.mp4` (no -c) must
+    use the in-package default.yaml via importlib.resources, not look for a
+    file on disk. Without this test, an inverted condition or a missing
+    import would only surface at user runtime.
+    """
+    fake_input = tmp_path / "fake.mp4"
+    fake_input.write_text("not a real video, but exists")
+    spy_default = mocker.spy(__import__("podclipper.main", fromlist=["load_default_config"]), "load_default_config")
+    spy_disk = mocker.spy(__import__("podclipper.main", fromlist=["load_config"]), "load_config")
+    mock_run = mocker.patch("podclipper.main.run_pipeline")
+
+    rc = main([str(fake_input)])
+
+    assert rc == 0
+    assert spy_default.call_count == 1, "load_default_config() must be called when -c is omitted"
+    assert spy_disk.call_count == 0, "load_config() (filesystem path) must NOT be called when -c is omitted"
+    assert mock_run.call_count == 1, "run_pipeline must still be invoked with the packaged cfg"
