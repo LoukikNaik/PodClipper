@@ -47,3 +47,20 @@ def test_complete_returns_message_content_from_litellm_response(mocker) -> None:
     result = provider.complete("anything")
 
     assert result == "hello world"
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.3 — forward self.model as model= kwarg
+# --------------------------------------------------------------------------- #
+
+def test_complete_passes_configured_model_string_to_litellm(mocker) -> None:
+    """The model string passed to __init__ is forwarded as model= to litellm.completion."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "ok")
+    provider = LiteLLMProvider(SimpleNamespace(), model="openai/gpt-5-mini")
+
+    provider.complete("hi")
+
+    assert mock_completion.call_args.kwargs["model"] == "openai/gpt-5-mini"
