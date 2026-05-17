@@ -83,3 +83,25 @@ def test_complete_wraps_user_prompt_in_user_role_message(mocker) -> None:
     assert mock_completion.call_args.kwargs["messages"] == [
         {"role": "user", "content": "hello?"},
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 1.5 — system prompt prepended as system-role message when given
+# --------------------------------------------------------------------------- #
+
+def test_complete_prepends_system_prompt_as_system_message_when_provided(
+    mocker,
+) -> None:
+    """Non-empty system_prompt → messages=[{system}, {user}] in that order."""
+    from src.llm.litellm_provider import LiteLLMProvider
+
+    mock_completion = mocker.patch("litellm.completion")
+    mock_completion.return_value = _make_litellm_response(mocker, "ok")
+    provider = LiteLLMProvider(SimpleNamespace(), model="anthropic/claude-x")
+
+    provider.complete("the question", system_prompt="be brief")
+
+    assert mock_completion.call_args.kwargs["messages"] == [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "the question"},
+    ]
