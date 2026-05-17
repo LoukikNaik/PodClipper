@@ -35,13 +35,27 @@ llm:
   provider: claude_cli           # claude_cli | litellm
   model: anthropic/claude-sonnet-4-5   # litellm format: '<vendor>/<model>'.
                                  # ignored by claude_cli (it picks its own).
+                                 # Routing examples:
+                                 #   anthropic/claude-sonnet-4-5    (direct Anthropic API)
+                                 #   openai/gpt-5-mini              (direct OpenAI API)
+                                 #   ollama/llama3                  (local, needs api_base)
+                                 #   openai/anthropic/claude-sonnet-4.5
+                                 #     ↑ via OpenAI-compatible gateway (TokenRouter,
+                                 #       OpenRouter, ...). 'openai/' = speak OAI proto;
+                                 #       rest is the upstream model string.
   max_tokens: 4096
   claude_cli:
     binary: claude               # path to CLI; "claude" uses $PATH
     extra_args: []
   litellm:
-    api_base: null               # set to e.g. http://localhost:11434 for
-                                 # ollama / vLLM / proxies; null = vendor default
+    api_base: null               # set for gateways or local runtimes, e.g.
+                                 #   https://api.tokenrouter.com/v1
+                                 #   http://localhost:11434             (ollama)
+                                 # null → use vendor's default endpoint.
+    api_key_env: null            # null → litellm reads the env var matching the model
+                                 # prefix (anthropic/ → ANTHROPIC_API_KEY,
+                                 # openai/ → OPENAI_API_KEY, ...). Override when
+                                 # using a gateway: set to e.g. TOKENROUTER_API_KEY.
     timeout_seconds: 900
     num_retries: 2
 
