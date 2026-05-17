@@ -16,6 +16,9 @@ def build_provider(llm_cfg: SimpleNamespace) -> LLMProvider:
     if provider_name == "anthropic_api":
         from .anthropic_api import AnthropicAPIProvider
         return AnthropicAPIProvider(llm_cfg.anthropic_api, model=llm_cfg.model)
+    if provider_name == "litellm":
+        from .litellm_provider import LiteLLMProvider
+        return LiteLLMProvider(llm_cfg.litellm, model=llm_cfg.model)
     raise LLMError(f"unknown llm.provider: {provider_name!r}")
 
 
