@@ -14,6 +14,7 @@ class LiteLLMProvider:
         self.model = model
         self.api_base = getattr(cfg, "api_base", None)
         self.timeout = getattr(cfg, "timeout_seconds", None)
+        self.num_retries = getattr(cfg, "num_retries", None)
 
     def complete(
         self,
@@ -37,6 +38,8 @@ class LiteLLMProvider:
             kwargs["api_base"] = self.api_base
         if self.timeout is not None:
             kwargs["timeout"] = self.timeout
+        if self.num_retries is not None:
+            kwargs["num_retries"] = self.num_retries
 
         try:
             response = litellm.completion(**kwargs)
