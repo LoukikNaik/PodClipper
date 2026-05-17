@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +23,12 @@ def load_config(path: str | Path) -> SimpleNamespace:
     with path.open("r") as f:
         raw = yaml.safe_load(f)
     return _to_ns(raw)
+
+
+def load_default_config() -> SimpleNamespace:
+    """Load the YAML bundled with the package (works from a wheel install)."""
+    raw = resources.files("podclipper.config").joinpath("default.yaml").read_text()
+    return _to_ns(yaml.safe_load(raw))
 
 
 def ns_to_dict(ns: Any) -> Any:

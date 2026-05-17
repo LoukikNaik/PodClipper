@@ -188,25 +188,24 @@ def test_ns_to_dict_passes_plain_lists_through_recursively() -> None:
 # Smoke test: the real config/default.yaml
 # --------------------------------------------------------------------------- #
 
-def test_load_config_loads_real_default_yaml_and_exposes_expected_top_level_sections() -> None:
-    """`config/default.yaml` loads and has all the top-level sections the pipeline reads.
+def test_load_default_config_returns_simplenamespace_with_pipeline_sections() -> None:
+    """`load_default_config()` reads the YAML bundled inside the package itself.
 
-    This guards against accidentally deleting a section the rest of the code
-    depends on. If a new top-level section is added, extend this test.
+    No filesystem path required — uses importlib.resources so it works from a
+    wheel install where the YAML lives inside site-packages.
     """
-    repo_root = Path(__file__).resolve().parents[2]
-    cfg = load_config(repo_root / "config" / "default.yaml")
+    from podclipper.config import load_default_config
 
+    cfg = load_default_config()
+
+    assert isinstance(cfg, SimpleNamespace)
     expected_sections = {
-        "logging",
-        "paths",
-        "transcribe",
-        "analyze",
-        "crop",
-        "detect",
-        "llm",
-        "subtitles",
+        "logging", "paths", "transcribe", "analyze",
+        "crop", "detect", "llm", "subtitles",
     }
-    actual_sections = set(vars(cfg).keys())
-    missing = expected_sections - actual_sections
-    assert not missing, f"config/default.yaml is missing expected sections: {missing}"
+    assert expected_sections <= set(vars(cfg).keys())
+
+
+# Real-config smoke is now covered by
+# test_load_default_config_returns_simplenamespace_with_pipeline_sections above,
+# which loads via importlib.resources from the in-package default.yaml.
