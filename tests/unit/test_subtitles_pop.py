@@ -10,6 +10,16 @@ def _w(text: str, start: float, end: float) -> Word:
     return Word(start=start, end=end, text=text)
 
 
+def test_pop_flushes_on_sentence_end() -> None:
+    words = [
+        _w("done.", 0.0, 0.3),
+        _w("Next", 0.4, 0.7),
+    ]
+    popups = generate_pop_popups(words, max_words_per_popup=2, max_gap_seconds=1.0)
+    assert len(popups) == 2
+    assert [[w.text for w in p.words] for p in popups] == [["done."], ["Next"]]
+
+
 def test_pop_flushes_on_long_gap() -> None:
     words = [
         _w("hello", 0.0, 0.3),

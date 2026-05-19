@@ -52,13 +52,15 @@ def generate_pop_popups(
             popups.append(PopPopup(start=buf[0].start, end=buf[-1].end, words=list(buf)))
             buf = []
 
+    SENT_END = {".", "!", "?"}
     for w in words:
-        if not w.text.strip():
+        token = w.text.strip()
+        if not token:
             continue
         if buf and (w.start - buf[-1].end) > max_gap_seconds:
             flush()
         buf.append(w)
-        if len(buf) >= max_words_per_popup:
+        if len(buf) >= max_words_per_popup or token[-1] in SENT_END:
             flush()
     flush()
     return popups
