@@ -30,6 +30,27 @@ class SubLine:
     words: list[Word]
 
 
+@dataclass
+class PopPopup:
+    start: float
+    end: float
+    words: list[Word]
+
+
+def generate_pop_popups(
+    words: list[Word],
+    max_words_per_popup: int = 1,
+    max_gap_seconds: float = 1.0,
+) -> list[PopPopup]:
+    """Group word tokens into 1–N word pop-style popups."""
+    popups: list[PopPopup] = []
+    for w in words:
+        if not w.text.strip():
+            continue
+        popups.append(PopPopup(start=w.start, end=w.end, words=[w]))
+    return popups
+
+
 def generate_subtitle_lines(
     words: list[Word],
     cfg: SimpleNamespace,
