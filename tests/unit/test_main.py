@@ -341,6 +341,13 @@ def test_apply_cli_overrides_sets_detect_debug_overlay_when_debug_detect_flag_tr
     assert cfg.detect.debug_overlay is True
 
 
+def test_build_parser_rejects_unknown_subtitle_style() -> None:
+    """argparse `choices=` rejects values outside {classic, pop}."""
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["video.mp4", "--subtitle-style", "neon"])
+
+
 def test_apply_cli_overrides_sets_subtitles_style_when_flag_pop() -> None:
     """`--subtitle-style pop` → `cfg.subtitles.style = 'pop'`."""
     cfg = _make_minimal_cfg()
