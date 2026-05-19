@@ -9,7 +9,12 @@ import pytest
 
 from podclipper import subtitles as sub_mod
 from podclipper.config import load_default_config
-from podclipper.subtitles import active_word_index, burn_subtitles, generate_pop_popups
+from podclipper.subtitles import (
+    active_word_index,
+    burn_subtitles,
+    generate_pop_popups,
+    pick_highlight_color,
+)
 from podclipper.types import Word
 
 
@@ -17,7 +22,9 @@ def test_default_config_has_pop_subtitle_knobs() -> None:
     cfg = load_default_config()
     assert cfg.subtitles.style == "classic"
     pop = cfg.subtitles.pop
-    assert isinstance(pop.highlight_color, str)
+    assert isinstance(pop.highlight_colors, list)
+    assert len(pop.highlight_colors) >= 1
+    assert all(isinstance(c, str) for c in pop.highlight_colors)
     assert isinstance(pop.scale, (int, float))
     assert isinstance(pop.shear_deg, (int, float))
     assert isinstance(pop.max_words_per_popup, int)
@@ -51,6 +58,15 @@ def test_burn_subtitles_dispatches_to_pop_when_style_pop(mocker) -> None:
         cfg=_cfg("pop"), title="",
     )
     assert pop.called and not classic.called
+
+
+def test_pick_highlight_color_cycles_modulo_len() -> None:
+    colors = ["red", "green"]
+    assert pick_highlight_color(0, colors) == "red"
+    assert pick_highlight_color(1, colors) == "green"
+    assert pick_highlight_color(2, colors) == "red"
+    assert pick_highlight_color(5, colors) == "green"
+    assert pick_highlight_color(10, ["only"]) == "only"
 
 
 def test_active_word_index_returns_index_or_none() -> None:

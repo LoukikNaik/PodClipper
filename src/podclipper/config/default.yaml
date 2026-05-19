@@ -161,7 +161,11 @@ subtitles:
     gradient_enabled: true       # dark gradient at top 30% of frame for text readability
     gradient_opacity: 0.55       # semi-transparent dark sweep
   pop:                           # only consulted when subtitles.style == "pop"
-    highlight_color: "&H003344FF" # red/orange active word (BGR in ASS)
+    font_size: 140               # pop captions are huge — fills ~half the frame width
+    outline_width: 6             # heavy black outline for readability over any background
+    highlight_colors:            # active word cycles through these per popup (red, green) for stimulation
+      - "&H003344FF"             # red/orange (BGR in ASS)
+      - "&H0033DD33"             # green
     scale: 1.08                  # active-word scale-up factor
     shear_deg: 8.0               # italic skew applied to all words
     max_words_per_popup: 2       # 1 = strictly one word at a time; 2 = pair when short
