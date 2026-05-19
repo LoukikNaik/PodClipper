@@ -8,8 +8,21 @@ from types import SimpleNamespace
 import pytest
 
 from podclipper import subtitles as sub_mod
+from podclipper.config import load_default_config
 from podclipper.subtitles import active_word_index, burn_subtitles, generate_pop_popups
 from podclipper.types import Word
+
+
+def test_default_config_has_pop_subtitle_knobs() -> None:
+    cfg = load_default_config()
+    assert cfg.subtitles.style == "classic"
+    pop = cfg.subtitles.pop
+    assert isinstance(pop.highlight_color, str)
+    assert isinstance(pop.scale, (int, float))
+    assert isinstance(pop.shear_deg, (int, float))
+    assert isinstance(pop.max_words_per_popup, int)
+    assert isinstance(pop.y_position_frac, (int, float))
+    assert isinstance(pop.max_gap_seconds, (int, float))
 
 
 def _cfg(style: str) -> SimpleNamespace:

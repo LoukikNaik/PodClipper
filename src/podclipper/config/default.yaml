@@ -131,6 +131,7 @@ crop:
                                   # the old hard-cut behavior.
 
 subtitles:
+  style: "classic"               # "classic" = current karaoke line; "pop" = 1-2 huge words at a time
   font_name: "Arial"
   font_size: 72
   primary_color: "&H00FFFFFF"    # white (BGR in ASS format)
@@ -159,6 +160,13 @@ subtitles:
     pill_corner_radius: 28
     gradient_enabled: true       # dark gradient at top 30% of frame for text readability
     gradient_opacity: 0.55       # semi-transparent dark sweep
+  pop:                           # only consulted when subtitles.style == "pop"
+    highlight_color: "&H003344FF" # red/orange active word (BGR in ASS)
+    scale: 1.08                  # active-word scale-up factor
+    shear_deg: 8.0               # italic skew applied to all words
+    max_words_per_popup: 2       # 1 = strictly one word at a time; 2 = pair when short
+    y_position_frac: 0.5         # vertical anchor as fraction of frame height (0.5 = center)
+    max_gap_seconds: 0.6         # inter-word gap that forces a flush
 
 diarize:                         # DEPRECATED — only consulted by `crop.mode: single`.
                                  # pyannote-driven multi-speaker follow-the-speaker crop.
