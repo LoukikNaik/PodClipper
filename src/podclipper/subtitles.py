@@ -55,6 +55,8 @@ def generate_pop_popups(
     for w in words:
         if not w.text.strip():
             continue
+        if buf and (w.start - buf[-1].end) > max_gap_seconds:
+            flush()
         buf.append(w)
         if len(buf) >= max_words_per_popup:
             flush()
