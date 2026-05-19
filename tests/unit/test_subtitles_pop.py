@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-from podclipper.subtitles import generate_pop_popups
+from podclipper.subtitles import active_word_index, generate_pop_popups
 from podclipper.types import Word
 
 
 def _w(text: str, start: float, end: float) -> Word:
     return Word(start=start, end=end, text=text)
+
+
+def test_active_word_index_returns_index_or_none() -> None:
+    popup = generate_pop_popups(
+        [_w("hello", 0.0, 0.3), _w("world", 0.4, 0.7)],
+        max_words_per_popup=2,
+        max_gap_seconds=1.0,
+    )[0]
+    assert active_word_index(popup, 0.1) == 0
+    assert active_word_index(popup, 0.5) == 1
+    assert active_word_index(popup, 0.35) is None
+    assert active_word_index(popup, 5.0) is None
 
 
 def test_pop_flushes_on_sentence_end() -> None:

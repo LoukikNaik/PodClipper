@@ -37,6 +37,14 @@ class PopPopup:
     words: list[Word]
 
 
+def active_word_index(popup: "PopPopup", t: float) -> Optional[int]:
+    """Index of the word in `popup` whose [start,end] contains `t`, else None."""
+    for i, w in enumerate(popup.words):
+        if w.start <= t <= w.end:
+            return i
+    return None
+
+
 def generate_pop_popups(
     words: list[Word],
     max_words_per_popup: int = 1,
