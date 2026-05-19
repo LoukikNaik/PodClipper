@@ -20,6 +20,16 @@ def _w(text: str, start: float, end: float) -> Word:
     return Word(start=start, end=end, text=text)
 
 
+def test_burn_subtitles_dispatches_to_classic_when_style_classic(mocker) -> None:
+    classic = mocker.patch.object(sub_mod, "_burn_classic", return_value=Path("/out.mp4"))
+    pop = mocker.patch.object(sub_mod, "_burn_pop", return_value=Path("/out.mp4"))
+    burn_subtitles(
+        Path("/in.mp4"), [_w("hi", 0.0, 0.3)], Path("/out.mp4"),
+        cfg=_cfg("classic"), title="",
+    )
+    assert classic.called and not pop.called
+
+
 def test_burn_subtitles_dispatches_to_pop_when_style_pop(mocker) -> None:
     classic = mocker.patch.object(sub_mod, "_burn_classic", return_value=Path("/out.mp4"))
     pop = mocker.patch.object(sub_mod, "_burn_pop", return_value=Path("/out.mp4"))
