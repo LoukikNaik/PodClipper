@@ -341,6 +341,17 @@ def test_apply_cli_overrides_sets_detect_debug_overlay_when_debug_detect_flag_tr
     assert cfg.detect.debug_overlay is True
 
 
+def test_apply_cli_overrides_leaves_subtitles_style_when_flag_omitted() -> None:
+    """No `--subtitle-style` → `cfg.subtitles.style` is not touched."""
+    cfg = _make_minimal_cfg()
+    cfg.subtitles = SimpleNamespace(style="classic")
+    args = _make_default_args()  # subtitle_style=None
+
+    apply_cli_overrides(cfg, args)
+
+    assert cfg.subtitles.style == "classic"
+
+
 def test_build_parser_rejects_unknown_subtitle_style() -> None:
     """argparse `choices=` rejects values outside {classic, pop}."""
     parser = build_parser()
