@@ -97,6 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep cache dir after completion (default: preserved for resume)",
     )
     p.add_argument(
+        "--subtitle-style", choices=["classic", "pop"], default=None,
+        help="Override cfg.subtitles.style (classic karaoke vs pop 1-2-word style)",
+    )
+    p.add_argument(
         "-v", "--verbose", action="store_true",
         help="Enable DEBUG-level logging",
     )
@@ -116,6 +120,8 @@ def apply_cli_overrides(cfg, args) -> None:
         cfg.crop.debug_overlay = True
     if args.debug_detect:
         cfg.detect.debug_overlay = True
+    if args.subtitle_style is not None:
+        cfg.subtitles.style = args.subtitle_style
     if args.verbose:
         cfg.logging.level = "DEBUG"
 
