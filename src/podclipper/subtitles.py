@@ -460,18 +460,21 @@ def _render_pop_onto_frame(
 
     shear = np.tan(np.deg2rad(shear_deg))
     sheared_w = canvas_w + int(abs(shear) * canvas_h)
-    sheared = Image.new("RGBA", (sheared_w, canvas_h), (0, 0, 0, 0))
-    # PIL affine inverse: (a, b, c, d, e, f) maps dst→src; b=-shear leans right.
-    text_canvas_shifted = text_canvas
-    sheared = text_canvas_shifted.transform(
+    sheared = text_canvas.transform(
         (sheared_w, canvas_h),
         Image.AFFINE,
         (1, shear, -shear * canvas_h, 0, 1, 0),
         resample=Image.BILINEAR,
     )
 
-    paste_x = (w - sheared_w) // 2
-    paste_y = int(h * y_position_frac) - canvas_h // 2
+    max_w = int(w * 0.92)
+    if sheared_w > max_w:
+        scale = max_w / sheared_w
+        new_size = (max_w, max(1, int(canvas_h * scale)))
+        sheared = sheared.resize(new_size, resample=Image.LANCZOS)
+
+    paste_x = (w - sheared.width) // 2
+    paste_y = int(h * y_position_frac) - sheared.height // 2
     overlay.paste(sheared, (paste_x, paste_y), sheared)
 
     merged = Image.alpha_composite(pil, overlay).convert("RGB")

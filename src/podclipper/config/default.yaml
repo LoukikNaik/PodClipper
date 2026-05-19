@@ -169,7 +169,8 @@ subtitles:
     scale: 1.08                  # active-word scale-up factor
     shear_deg: 8.0               # italic skew applied to all words
     max_words_per_popup: 2       # 1 = strictly one word at a time; 2 = pair when short
-    y_position_frac: 0.5         # vertical anchor as fraction of frame height (0.5 = center)
+    y_position_frac: 0.72        # vertical anchor as fraction of frame height (0=top, 1=bottom)
+                                  # 0.72 = lower-middle (TikTok zone). Override via config.
     max_gap_seconds: 0.6         # inter-word gap that forces a flush
 
 diarize:                         # DEPRECATED — only consulted by `crop.mode: single`.
