@@ -44,10 +44,21 @@ def generate_pop_popups(
 ) -> list[PopPopup]:
     """Group word tokens into 1–N word pop-style popups."""
     popups: list[PopPopup] = []
+    buf: list[Word] = []
+
+    def flush() -> None:
+        nonlocal buf
+        if buf:
+            popups.append(PopPopup(start=buf[0].start, end=buf[-1].end, words=list(buf)))
+            buf = []
+
     for w in words:
         if not w.text.strip():
             continue
-        popups.append(PopPopup(start=w.start, end=w.end, words=[w]))
+        buf.append(w)
+        if len(buf) >= max_words_per_popup:
+            flush()
+    flush()
     return popups
 
 
