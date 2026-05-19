@@ -394,6 +394,30 @@ def burn_subtitles(
     cfg: SimpleNamespace,
     title: str = "",
 ) -> Path:
+    """Dispatch to the classic or pop subtitle renderer based on cfg.subtitles.style."""
+    style = getattr(cfg.subtitles, "style", "classic")
+    if style == "pop":
+        return _burn_pop(video_path, words, out_path, cfg, title)
+    return _burn_classic(video_path, words, out_path, cfg, title)
+
+
+def _burn_pop(
+    video_path: Path,
+    words: list[Word],
+    out_path: Path,
+    cfg: SimpleNamespace,
+    title: str = "",
+) -> Path:
+    raise NotImplementedError("pop renderer not yet wired")
+
+
+def _burn_classic(
+    video_path: Path,
+    words: list[Word],
+    out_path: Path,
+    cfg: SimpleNamespace,
+    title: str = "",
+) -> Path:
     """Render karaoke subtitles + optional fading title overlay onto `video_path`."""
     video_path = Path(video_path)
     out_path = Path(out_path)
