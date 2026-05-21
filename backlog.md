@@ -382,3 +382,29 @@ install verification for the rest.
 3. Phase 1 — LiteLLM swap (TDD; safety net is Phase 0).
 4. Manual smoke: rerun with `provider: litellm`, confirm parity.
 5. Phase 2 — package conversion (TDD where pure, smoke for the rest).
+
+## Explore Marlin 2B for clip selection / evaluation
+
+**What:** Evaluate [NemoStation/Marlin-2B](https://huggingface.co/NemoStation/Marlin-2B)
+as a candidate model for one of the LLM call sites — most likely reel
+selection (`analyze.py`) or LLM-as-judge (`evaluate.py`).
+
+**Why it might be worth a look:** 2B is small enough to run locally
+(CPU on Apple Silicon, or any consumer GPU) — would close the loop on
+PodClipper's "100% local" framing, which today applies only to audio.
+Today the transcript still leaves the machine for Claude/OpenAI/etc.
+
+**What to find out:**
+- Context window — long enough for ~10-12K-token hour-long transcripts?
+- JSON-mode / function-calling support — our prompts expect strict JSON
+  back (`reel_detector`, `reel_evaluator`). If it can't reliably emit
+  JSON, it's a non-starter without a heavier post-parser.
+- Quality on the reel-selection task vs Claude Sonnet — eyeball on 2-3
+  episodes via `cfg.llm.provider: litellm` + `cfg.llm.model: ollama/marlin-2b`
+  (assuming it lands on Ollama or LiteLLM supports it directly).
+- Latency on the reference rig (M-series Mac, no GPU) — fast enough that
+  the local-only mode isn't a 30-minute wait?
+
+**Where it plugs in:** No new code path needed if LiteLLM exposes it —
+just a config swap. If not, add a Marlin-specific provider under
+`src/podclipper/llm/`.

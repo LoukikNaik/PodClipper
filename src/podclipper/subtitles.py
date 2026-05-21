@@ -30,6 +30,55 @@ class SubLine:
     words: list[Word]
 
 
+@dataclass
+class PopPopup:
+    start: float
+    end: float
+    words: list[Word]
+
+
+def pick_highlight_color(popup_idx: int, colors: list):
+    """Cycle through `colors` by popup index — colors[popup_idx % len(colors)]."""
+    return colors[popup_idx % len(colors)]
+
+
+def active_word_index(popup: "PopPopup", t: float) -> Optional[int]:
+    """Index of the word in `popup` whose [start,end] contains `t`, else None."""
+    for i, w in enumerate(popup.words):
+        if w.start <= t <= w.end:
+            return i
+    return None
+
+
+def generate_pop_popups(
+    words: list[Word],
+    max_words_per_popup: int = 1,
+    max_gap_seconds: float = 1.0,
+) -> list[PopPopup]:
+    """Group word tokens into 1–N word pop-style popups."""
+    popups: list[PopPopup] = []
+    buf: list[Word] = []
+
+    def flush() -> None:
+        nonlocal buf
+        if buf:
+            popups.append(PopPopup(start=buf[0].start, end=buf[-1].end, words=list(buf)))
+            buf = []
+
+    SENT_END = {".", "!", "?"}
+    for w in words:
+        token = w.text.strip()
+        if not token:
+            continue
+        if buf and (w.start - buf[-1].end) > max_gap_seconds:
+            flush()
+        buf.append(w)
+        if len(buf) >= max_words_per_popup or token[-1] in SENT_END:
+            flush()
+    flush()
+    return popups
+
+
 def generate_subtitle_lines(
     words: list[Word],
     cfg: SimpleNamespace,
@@ -344,6 +393,209 @@ def _mux_audio(
 
 
 def burn_subtitles(
+    video_path: Path,
+    words: list[Word],
+    out_path: Path,
+    cfg: SimpleNamespace,
+    title: str = "",
+) -> Path:
+    """Dispatch to the classic or pop subtitle renderer based on cfg.subtitles.style."""
+    style = getattr(cfg.subtitles, "style", "classic")
+    if style == "pop":
+        return _burn_pop(video_path, words, out_path, cfg, title)
+    return _burn_classic(video_path, words, out_path, cfg, title)
+
+
+def _render_pop_onto_frame(
+    frame: np.ndarray,
+    popup: PopPopup,
+    active_idx: Optional[int],
+    base_font: ImageFont.ImageFont,
+    big_font: ImageFont.ImageFont,
+    inactive_rgba: tuple[int, int, int, int],
+    highlight_rgbas: list[tuple[int, int, int, int]],
+    popup_idx: int,
+    outline_rgba: tuple[int, int, int, int],
+    outline_width: int,
+    shear_deg: float,
+    y_position_frac: float,
+) -> np.ndarray:
+    """Composite a pop-style popup onto `frame` with active word highlighted+scaled."""
+    h, w = frame.shape[:2]
+    pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    overlay = Image.new("RGBA", pil.size, (0, 0, 0, 0))
+
+    tokens = [(wobj.text.strip().upper(), i == active_idx) for i, wobj in enumerate(popup.words)]
+    tokens = [(t, a) for t, a in tokens if t]
+    if not tokens:
+        return frame
+
+    measure = ImageDraw.Draw(overlay)
+    sizes: list[tuple[int, int, bool, ImageFont.ImageFont]] = []
+    for txt, is_active in tokens:
+        font = big_font if is_active else base_font
+        bbox = measure.textbbox((0, 0), txt, font=font, stroke_width=outline_width)
+        sizes.append((bbox[2] - bbox[0], bbox[3] - bbox[1], is_active, font))
+
+    gap = int(base_font.size * 0.35)
+    total_w = sum(s[0] for s in sizes) + gap * (len(sizes) - 1)
+    max_h = max(s[1] for s in sizes)
+
+    pad = outline_width * 2
+    canvas_w = total_w + pad * 2
+    canvas_h = max_h + pad * 2
+    text_canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    tdraw = ImageDraw.Draw(text_canvas)
+
+    highlight_rgba = pick_highlight_color(popup_idx, highlight_rgbas)
+    x = pad
+    for (txt, is_active), (tw, th, _, font) in zip(tokens, sizes):
+        color = highlight_rgba if is_active else inactive_rgba
+        baseline_y = pad + (max_h - th) // 2
+        tdraw.text(
+            (x, baseline_y), txt, font=font, fill=color,
+            stroke_width=outline_width, stroke_fill=outline_rgba,
+        )
+        x += tw + gap
+
+    shear = np.tan(np.deg2rad(shear_deg))
+    sheared_w = canvas_w + int(abs(shear) * canvas_h)
+    sheared = text_canvas.transform(
+        (sheared_w, canvas_h),
+        Image.AFFINE,
+        (1, shear, -shear * canvas_h, 0, 1, 0),
+        resample=Image.BILINEAR,
+    )
+
+    max_w = int(w * 0.92)
+    if sheared_w > max_w:
+        scale = max_w / sheared_w
+        new_size = (max_w, max(1, int(canvas_h * scale)))
+        sheared = sheared.resize(new_size, resample=Image.LANCZOS)
+
+    paste_x = (w - sheared.width) // 2
+    paste_y = int(h * y_position_frac) - sheared.height // 2
+    overlay.paste(sheared, (paste_x, paste_y), sheared)
+
+    merged = Image.alpha_composite(pil, overlay).convert("RGB")
+    return cv2.cvtColor(np.array(merged), cv2.COLOR_RGB2BGR)
+
+
+def _burn_pop(
+    video_path: Path,
+    words: list[Word],
+    out_path: Path,
+    cfg: SimpleNamespace,
+    title: str = "",
+) -> Path:
+    """Render TikTok-style pop subtitles (1-2 huge sheared words at a time)."""
+    video_path = Path(video_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not words:
+        raise SubtitleError("empty word list — nothing to render")
+
+    pcfg = cfg.subtitles.pop
+    popups = generate_pop_popups(
+        words,
+        max_words_per_popup=int(pcfg.max_words_per_popup),
+        max_gap_seconds=float(pcfg.max_gap_seconds),
+    )
+    log.info(f"Pop subtitles: {len(words)} words → {len(popups)} popups")
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise SubtitleError(f"OpenCV could not open {video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    fade_out_seconds = float(getattr(cfg.subtitles, "fade_out_seconds", 0.0))
+    fade_out_start_frame = (
+        max(0, total_frames - int(round(fade_out_seconds * fps)))
+        if (fade_out_seconds > 0 and total_frames > 0)
+        else None
+    )
+
+    base_size = int(pcfg.font_size)
+    big_size = max(base_size + 1, int(round(base_size * float(pcfg.scale))))
+    base_font = _load_font(base_size, cfg.subtitles.font_name)
+    big_font = _load_font(big_size, cfg.subtitles.font_name)
+
+    inactive_rgba = _parse_ass_color(cfg.subtitles.primary_color)
+    highlight_rgbas = [_parse_ass_color(c) for c in pcfg.highlight_colors]
+    outline_rgba = _parse_ass_color(cfg.subtitles.outline_color)
+    outline_w = int(pcfg.outline_width)
+    shear_deg = float(pcfg.shear_deg)
+    y_frac = float(pcfg.y_position_frac)
+
+    tmp_video = Path(tempfile.mkstemp(prefix="ave_pop_", suffix=".mp4")[1])
+    encoder = _open_ffmpeg_pipe(tmp_video, width, height, fps, cfg)
+
+    pop_idx = 0
+    frame_idx = 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            t = frame_idx / fps
+
+            while pop_idx < len(popups) and popups[pop_idx].end < t:
+                pop_idx += 1
+            active_popup: Optional[PopPopup] = None
+            if pop_idx < len(popups) and popups[pop_idx].start <= t <= popups[pop_idx].end:
+                active_popup = popups[pop_idx]
+
+            if active_popup is not None:
+                aidx = active_word_index(active_popup, t)
+                frame = _render_pop_onto_frame(
+                    frame, active_popup, aidx,
+                    base_font, big_font,
+                    inactive_rgba, highlight_rgbas, pop_idx, outline_rgba,
+                    outline_w, shear_deg, y_frac,
+                )
+
+            if fade_out_start_frame is not None and frame_idx >= fade_out_start_frame:
+                progress = (frame_idx - fade_out_start_frame) / max(
+                    1, total_frames - fade_out_start_frame - 1
+                )
+                fade_alpha = max(0.0, 1.0 - progress)
+                frame = (frame.astype(np.float32) * fade_alpha).astype(np.uint8)
+
+            try:
+                encoder.stdin.write(frame.tobytes())
+            except BrokenPipeError as e:
+                stderr = encoder.stderr.read().decode("utf-8", errors="replace")[-500:]
+                raise SubtitleError(f"ffmpeg encoder died: {stderr}") from e
+            frame_idx += 1
+    finally:
+        cap.release()
+
+    encoder.stdin.close()
+    ret = encoder.wait(timeout=120)
+    if ret != 0:
+        stderr = encoder.stderr.read().decode("utf-8", errors="replace")[-500:]
+        raise SubtitleError(f"ffmpeg encoder exited with {ret}: {stderr}")
+
+    rendered_duration = frame_idx / fps if fps > 0 else 0.0
+    log.info(f"Pop-subtitled {frame_idx} frames → muxing audio...")
+    try:
+        _mux_audio(
+            video_path, tmp_video, out_path,
+            audio_fade_out=fade_out_seconds,
+            video_duration=rendered_duration,
+        )
+    finally:
+        tmp_video.unlink(missing_ok=True)
+
+    log.info(f"Pop subtitle burn complete → {out_path}")
+    return out_path
+
+
+def _burn_classic(
     video_path: Path,
     words: list[Word],
     out_path: Path,

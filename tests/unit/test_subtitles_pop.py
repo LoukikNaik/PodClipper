@@ -1,0 +1,131 @@
+"""TDD-driven tests for the pop-style subtitle path in `src/subtitles.py`."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from podclipper import subtitles as sub_mod
+from podclipper.config import load_default_config
+from podclipper.subtitles import (
+    active_word_index,
+    burn_subtitles,
+    generate_pop_popups,
+    pick_highlight_color,
+)
+from podclipper.types import Word
+
+
+def test_default_config_has_pop_subtitle_knobs() -> None:
+    cfg = load_default_config()
+    assert cfg.subtitles.style == "classic"
+    pop = cfg.subtitles.pop
+    assert isinstance(pop.highlight_colors, list)
+    assert len(pop.highlight_colors) >= 1
+    assert all(isinstance(c, str) for c in pop.highlight_colors)
+    assert isinstance(pop.scale, (int, float))
+    assert isinstance(pop.shear_deg, (int, float))
+    assert isinstance(pop.max_words_per_popup, int)
+    assert isinstance(pop.y_position_frac, (int, float))
+    assert isinstance(pop.max_gap_seconds, (int, float))
+
+
+def _cfg(style: str) -> SimpleNamespace:
+    return SimpleNamespace(subtitles=SimpleNamespace(style=style))
+
+
+def _w(text: str, start: float, end: float) -> Word:
+    return Word(start=start, end=end, text=text)
+
+
+def test_burn_subtitles_dispatches_to_classic_when_style_classic(mocker) -> None:
+    classic = mocker.patch.object(sub_mod, "_burn_classic", return_value=Path("/out.mp4"))
+    pop = mocker.patch.object(sub_mod, "_burn_pop", return_value=Path("/out.mp4"))
+    burn_subtitles(
+        Path("/in.mp4"), [_w("hi", 0.0, 0.3)], Path("/out.mp4"),
+        cfg=_cfg("classic"), title="",
+    )
+    assert classic.called and not pop.called
+
+
+def test_burn_subtitles_dispatches_to_pop_when_style_pop(mocker) -> None:
+    classic = mocker.patch.object(sub_mod, "_burn_classic", return_value=Path("/out.mp4"))
+    pop = mocker.patch.object(sub_mod, "_burn_pop", return_value=Path("/out.mp4"))
+    burn_subtitles(
+        Path("/in.mp4"), [_w("hi", 0.0, 0.3)], Path("/out.mp4"),
+        cfg=_cfg("pop"), title="",
+    )
+    assert pop.called and not classic.called
+
+
+def test_pick_highlight_color_cycles_modulo_len() -> None:
+    colors = ["red", "green"]
+    assert pick_highlight_color(0, colors) == "red"
+    assert pick_highlight_color(1, colors) == "green"
+    assert pick_highlight_color(2, colors) == "red"
+    assert pick_highlight_color(5, colors) == "green"
+    assert pick_highlight_color(10, ["only"]) == "only"
+
+
+def test_active_word_index_returns_index_or_none() -> None:
+    popup = generate_pop_popups(
+        [_w("hello", 0.0, 0.3), _w("world", 0.4, 0.7)],
+        max_words_per_popup=2,
+        max_gap_seconds=1.0,
+    )[0]
+    assert active_word_index(popup, 0.1) == 0
+    assert active_word_index(popup, 0.5) == 1
+    assert active_word_index(popup, 0.35) is None
+    assert active_word_index(popup, 5.0) is None
+
+
+def test_pop_flushes_on_sentence_end() -> None:
+    words = [
+        _w("done.", 0.0, 0.3),
+        _w("Next", 0.4, 0.7),
+    ]
+    popups = generate_pop_popups(words, max_words_per_popup=2, max_gap_seconds=1.0)
+    assert len(popups) == 2
+    assert [[w.text for w in p.words] for p in popups] == [["done."], ["Next"]]
+
+
+def test_pop_flushes_on_long_gap() -> None:
+    words = [
+        _w("hello", 0.0, 0.3),
+        _w("world", 2.0, 2.3),
+    ]
+    popups = generate_pop_popups(words, max_words_per_popup=2, max_gap_seconds=1.0)
+    assert len(popups) == 2
+    assert [[w.text for w in p.words] for p in popups] == [["hello"], ["world"]]
+
+
+def test_pop_pairs_adjacent_words_at_cap_two() -> None:
+    words = [
+        _w("hello", 0.0, 0.3),
+        _w("world", 0.4, 0.7),
+        _w("again", 0.8, 1.1),
+        _w("now", 1.2, 1.4),
+    ]
+    popups = generate_pop_popups(words, max_words_per_popup=2, max_gap_seconds=1.0)
+    assert len(popups) == 2
+    assert [[w.text for w in p.words] for p in popups] == [
+        ["hello", "world"],
+        ["again", "now"],
+    ]
+    assert popups[0].start == 0.0 and popups[0].end == 0.7
+    assert popups[1].start == 0.8 and popups[1].end == 1.4
+
+
+def test_pop_one_word_per_popup_by_default() -> None:
+    words = [
+        _w("hello", 0.0, 0.3),
+        _w("world", 0.4, 0.7),
+        _w("again", 0.8, 1.1),
+    ]
+    popups = generate_pop_popups(words, max_words_per_popup=1, max_gap_seconds=1.0)
+    assert len(popups) == 3
+    assert [p.start for p in popups] == [0.0, 0.4, 0.8]
+    assert [p.end for p in popups] == [0.3, 0.7, 1.1]
+    assert [[w.text for w in p.words] for p in popups] == [["hello"], ["world"], ["again"]]

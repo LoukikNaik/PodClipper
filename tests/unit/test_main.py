@@ -253,6 +253,7 @@ def _make_default_args() -> SimpleNamespace:
         max_clips=None,
         debug_crop=False,
         debug_detect=False,
+        subtitle_style=None,
         verbose=False,
     )
 
@@ -338,6 +339,36 @@ def test_apply_cli_overrides_sets_detect_debug_overlay_when_debug_detect_flag_tr
     apply_cli_overrides(cfg, args)
 
     assert cfg.detect.debug_overlay is True
+
+
+def test_apply_cli_overrides_leaves_subtitles_style_when_flag_omitted() -> None:
+    """No `--subtitle-style` → `cfg.subtitles.style` is not touched."""
+    cfg = _make_minimal_cfg()
+    cfg.subtitles = SimpleNamespace(style="classic")
+    args = _make_default_args()  # subtitle_style=None
+
+    apply_cli_overrides(cfg, args)
+
+    assert cfg.subtitles.style == "classic"
+
+
+def test_build_parser_rejects_unknown_subtitle_style() -> None:
+    """argparse `choices=` rejects values outside {classic, pop}."""
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["video.mp4", "--subtitle-style", "neon"])
+
+
+def test_apply_cli_overrides_sets_subtitles_style_when_flag_pop() -> None:
+    """`--subtitle-style pop` → `cfg.subtitles.style = 'pop'`."""
+    cfg = _make_minimal_cfg()
+    cfg.subtitles = SimpleNamespace(style="classic")
+    args = _make_default_args()
+    args.subtitle_style = "pop"
+
+    apply_cli_overrides(cfg, args)
+
+    assert cfg.subtitles.style == "pop"
 
 
 def test_apply_cli_overrides_sets_logging_level_to_debug_when_verbose_true() -> None:
