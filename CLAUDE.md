@@ -41,7 +41,8 @@ Source video
   │                       single  → 9:16 follow-the-speaker
   │                       stacked → two 9:8 panels, one person each
   │                       (pose-anchored, body-IoU lock, lerp transitions)
-  │     subtitles       PIL karaoke word highlight + fading title
+  │     subtitles       karaoke (classic) or 1-2-word pop overlay
+  │                     cfg.subtitles.style picks the renderer
   │     evaluate        LLM-as-judge scorecard + publish/review/skip verdict
   │
   ↓  outputs/<timestamp>/reel_NN_<slug>.mp4
@@ -62,7 +63,7 @@ Source video
 | `src/podclipper/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |
 | `src/podclipper/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the new shot-aware path. |
 | `src/podclipper/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and new `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel). |
-| `src/podclipper/subtitles.py` | Karaoke word-highlight burner + fading title overlay + audio fade-out. |
+| `src/podclipper/subtitles.py` | Two renderers: `_burn_classic` (karaoke word highlight + fading title + audio fade-out) and `_burn_pop` (1–2 huge sheared words, alternating highlight color). `burn_subtitles` dispatches by `cfg.subtitles.style` (`classic` \| `pop`). |
 | `src/podclipper/evaluate.py` | LLM-as-judge scorer; writes `verdict` + numeric scores into reel sidecar. |
 | `src/podclipper/diarize.py` | **No longer in the hot path.** pyannote.audio + mouth-motion linking; kept for reference / single-locked-camera future use. |
 | `src/podclipper/types.py` | Shared dataclasses: `BBox`, `Word`, `Clip`, `Timeline`, etc. |
@@ -113,6 +114,43 @@ Tunable knobs (`src/podclipper/config/default.yaml` → `crop:`):
 - `shot_sep_frac` (0.20), `shot_height_cap_frac` (0.70),
   `shot_smooth_window_frames` (15) — wide-shot detector
 
+## The pop subtitle path (optional)
+
+Alternative to the classic karaoke renderer for TikTok/Reels-style
+captions — 1–2 huge italic-sheared words at a time, active word in a
+cycling highlight color (red → green by default) with a slight scale-up,
+heavy black outline. Enabled per-run with `--subtitle-style pop` or
+per-config with `cfg.subtitles.style: "pop"`. Default is `classic`.
+
+**Per popup:**
+
+1. `generate_pop_popups` groups words into 1–N word popups, flushing on
+   the `max_words_per_popup` cap, sentence-ending punctuation, or any
+   inter-word gap > `max_gap_seconds`.
+2. `active_word_index(popup, t)` returns which word in the popup is
+   currently being spoken.
+3. `_render_pop_onto_frame` draws the popup onto a small canvas, applies
+   a horizontal shear via affine transform, and uniformly scales it
+   down if the sheared width exceeds 92% of the frame width (overflow
+   guard — keeps long words like "CONFIDENCE" from clipping past the
+   edges).
+4. `pick_highlight_color(popup_idx, colors)` cycles through
+   `cfg.subtitles.pop.highlight_colors` by popup index.
+
+Tunable knobs (`src/podclipper/config/default.yaml` → `subtitles.pop:`):
+- `font_size` (140), `outline_width` (6) — both larger than classic.
+- `highlight_colors` (list of ASS colors, cycled per popup) — defaults
+  to `[red, green]`.
+- `scale` (1.08) — active-word scale-up factor.
+- `shear_deg` (8.0) — italic skew applied to all words in the popup.
+- `max_words_per_popup` (2), `max_gap_seconds` (0.6) — popup grouping.
+- `y_position_frac` (0.72) — vertical anchor as fraction of frame
+  height (`0` = top, `1` = bottom; `0.72` = TikTok lower-middle zone).
+
+The classic path stays bit-identical when `style == "classic"` —
+`burn_subtitles` is a thin dispatcher to `_burn_classic` (body unchanged
+from before the pop feature) or `_burn_pop`.
+
 ## Caching layout
 
 Per source video, intermediates persist under `.cache/<stem>-<hash>/`:
@@ -153,6 +191,9 @@ podclipper video.mp4 --llm-provider litellm --output-dir outputs --max-clips 5 -
 
 # Override config (pass a FULL yaml — no partial merging)
 podclipper video.mp4 -c my-overrides.yaml
+
+# Pop subtitle style (TikTok-style 1-2 huge sheared words at a time)
+podclipper video.mp4 --subtitle-style pop
 
 # Force legacy single-crop path
 # (set cfg.crop.mode to "single" in your override config)
@@ -228,7 +269,7 @@ problem by showing both people whenever the source goes wide.
 | Wrong person being cropped | `src/podclipper/detect.py` (face attribution), `src/podclipper/timeline.py` (shot classifier) |
 | Vibrating / jumpy stacked panel | `src/podclipper/crop.py` (`smart_crop_916_stacked`) — tweak `stacked_iou_threshold` / `stacked_transition_frames` |
 | Crop misses head | `src/podclipper/crop.py` (`_bbox_from_pose_anchors`) — tweak the 1.5/3.5 head-height multipliers |
-| Subtitles look off | `src/podclipper/subtitles.py`, `config.subtitles.*` |
+| Subtitles look off | `src/podclipper/subtitles.py` — check `cfg.subtitles.style` first to know which renderer is in play (`_burn_classic` vs `_burn_pop`); knobs under `config.subtitles.*` and `config.subtitles.pop.*` |
 | Reel marked skip | `src/podclipper/evaluate.py`, sidecar `.txt` has the LLM's full feedback |
 | Pipeline times out at LLM | `cfg.llm.claude_cli.timeout_seconds` |
 | HF / pyannote errors | only relevant in `crop.mode = single` + diarize.enabled |
