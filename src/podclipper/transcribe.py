@@ -25,6 +25,38 @@ _model_cache: dict[tuple, object] = {}
 _model_cache_lock = threading.Lock()
 
 
+_SUPPORTED_ENGINES = {"faster_whisper", "mlx_whisper"}
+
+_ENGINE_SUFFIX = {"faster_whisper": "fw", "mlx_whisper": "mlx"}
+
+
+def engine_suffix(engine: str) -> str:
+    """Short tag for cache filenames so fw and mlx outputs don't collide."""
+    return _ENGINE_SUFFIX[engine]
+
+
+def first_pass_cache_path(cache_dir: Path, engine: str) -> Path:
+    """Per-engine cache path for the full-video first-pass transcript JSON."""
+    return cache_dir / f"first_pass_transcript_{engine_suffix(engine)}.json"
+
+
+def words_cache_path(clip_cache_dir: Path, engine: str) -> Path:
+    """Per-engine cache path for a clip's 2nd-pass word-level JSON."""
+    return clip_cache_dir / f"words_{engine_suffix(engine)}.json"
+
+
+def _resolve_engine(cfg: SimpleNamespace) -> str:
+    """Return the configured transcription engine, validated against the
+    supported set so misconfiguration surfaces before any model load."""
+    engine = cfg.transcribe.engine
+    if engine not in _SUPPORTED_ENGINES:
+        raise ValueError(
+            f"Unknown transcribe.engine: {engine!r}. "
+            f"Supported: {sorted(_SUPPORTED_ENGINES)}"
+        )
+    return engine
+
+
 def _resolve_device(requested: str) -> str:
     """faster-whisper uses CTranslate2 (cpu/cuda only — no MPS)."""
     if requested != "auto":
@@ -74,6 +106,75 @@ def _decode_audio_to_float32(audio_path: Path) -> np.ndarray:
     result = subprocess.run(cmd, check=True, capture_output=True)
     pcm = np.frombuffer(result.stdout, dtype=np.int16)
     return pcm.astype(np.float32) / 32768.0
+
+
+def _run_pass(
+    audio: np.ndarray,
+    *,
+    engine: str,
+    pass_cfg: SimpleNamespace,
+    language: str | None,
+    word_timestamps: bool,
+    time_offset: float = 0.0,
+) -> tuple[list[TranscriptSegment], str]:
+    """Engine-aware single-shot transcription. faster-whisper goes through the
+    cached `_get_model` + `_transcribe_array`; mlx-whisper goes direct."""
+    if engine == "mlx_whisper":
+        return _transcribe_array_mlx(
+            audio,
+            repo=pass_cfg.mlx_repo,
+            language=language,
+            word_timestamps=word_timestamps,
+            time_offset=time_offset,
+        )
+    model = _get_model(pass_cfg.model, pass_cfg.compute_type, pass_cfg.device)
+    return _transcribe_array(
+        model, audio,
+        language=language,
+        beam_size=pass_cfg.beam_size,
+        word_timestamps=word_timestamps,
+        time_offset=time_offset,
+    )
+
+
+def _transcribe_array_mlx(
+    audio: np.ndarray,
+    *,
+    repo: str,
+    language: str | None,
+    word_timestamps: bool,
+    time_offset: float = 0.0,
+) -> tuple[list[TranscriptSegment], str]:
+    """mlx-whisper variant of `_transcribe_array`. Returns the same
+    (segments, language) shape as the faster-whisper path."""
+    import mlx_whisper
+
+    result = mlx_whisper.transcribe(
+        audio,
+        path_or_hf_repo=repo,
+        language=language,
+        word_timestamps=word_timestamps,
+        verbose=None,
+    )
+
+    segments: list[TranscriptSegment] = []
+    for seg in result.get("segments", []):
+        words: list[Word] = []
+        if word_timestamps:
+            for w in seg.get("words", []) or []:
+                words.append(Word(
+                    start=float(w["start"]) + time_offset,
+                    end=float(w["end"]) + time_offset,
+                    text=w["word"],
+                    confidence=float(w.get("probability", 1.0)),
+                ))
+        segments.append(TranscriptSegment(
+            start=float(seg["start"]) + time_offset,
+            end=float(seg["end"]) + time_offset,
+            text=seg["text"].strip(),
+            words=words,
+        ))
+    return segments, result["language"]
 
 
 def _transcribe_array(
@@ -144,7 +245,7 @@ def transcribe_first_pass(
 ) -> Transcript:
     """Parallel-chunk transcription of the full video audio for LLM analysis."""
     fp = cfg.transcribe.first_pass
-    model = _get_model(fp.model, fp.compute_type, fp.device)
+    engine = _resolve_engine(cfg)
     language = cfg.transcribe.language
 
     log.info(f"Decoding audio {audio_path.name} for first-pass transcription...")
@@ -155,16 +256,21 @@ def transcribe_first_pass(
         chunk_seconds=cfg.audio.chunk_seconds,
         overlap_seconds=cfg.audio.chunk_overlap_seconds,
     )
-    log.info(f"First pass: transcribing {len(chunks)} chunks with {fp.max_workers} workers")
+    # mlx-whisper uses numba internally and is not thread-safe — force serial
+    # invocation regardless of fp.max_workers. (mlx already parallelizes on GPU
+    # within a single call, so we don't lose much.)
+    max_workers = 1 if engine == "mlx_whisper" else fp.max_workers
+    log.info(f"First pass ({engine}): transcribing {len(chunks)} chunks with {max_workers} workers")
 
     def _work(chunk: ChunkRange) -> tuple[int, list[TranscriptSegment], str]:
         start_i = int(chunk.start * _WHISPER_SAMPLE_RATE)
         end_i = int(chunk.end * _WHISPER_SAMPLE_RATE)
         slice_ = audio[start_i:end_i]
-        segs, lang = _transcribe_array(
-            model, slice_,
+        segs, lang = _run_pass(
+            slice_,
+            engine=engine,
+            pass_cfg=fp,
             language=language,
-            beam_size=fp.beam_size,
             word_timestamps=True,
             time_offset=chunk.start,
         )
@@ -174,7 +280,7 @@ def transcribe_first_pass(
     per_chunk: list[list[TranscriptSegment]] = [[] for _ in chunks]
     detected_language: str | None = None
 
-    with ThreadPoolExecutor(max_workers=fp.max_workers) as ex:
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(_work, c) for c in chunks]
         for fut in as_completed(futures):
             idx, segs, lang = fut.result()
@@ -197,13 +303,14 @@ def transcribe_second_pass(
     """High-quality single-shot transcription of an extracted clip; returns
     word-level timestamps, clip-relative."""
     sp = cfg.transcribe.second_pass
-    model = _get_model(sp.model, sp.compute_type, sp.device)
+    engine = _resolve_engine(cfg)
 
     audio = _decode_audio_to_float32(clip_audio_or_video)
-    segs, _ = _transcribe_array(
-        model, audio,
+    segs, _ = _run_pass(
+        audio,
+        engine=engine,
+        pass_cfg=sp,
         language=cfg.transcribe.language,
-        beam_size=sp.beam_size,
         word_timestamps=sp.word_timestamps,
         time_offset=0.0,
     )

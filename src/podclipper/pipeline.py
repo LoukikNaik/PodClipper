@@ -39,8 +39,11 @@ from .trailer import (
     refine_cut_bounds_with_llm,
 )
 from .transcribe import (
+    engine_suffix,
+    first_pass_cache_path,
     transcribe_first_pass,
     transcribe_second_pass_cached,
+    words_cache_path,
 )
 from .transcribe_cleanup import cleanup_words
 from .types import Clip, Transcript, TranscriptSegment, VideoMeta, Word
@@ -126,7 +129,7 @@ def run_pipeline(
         overwrite=not use_cache,
     )
 
-    transcript_cache = cache / "first_pass_transcript.json"
+    transcript_cache = first_pass_cache_path(cache, cfg.transcribe.engine)
     if use_cache and transcript_cache.exists():
         log.info(f"Reusing cached first-pass transcript: {transcript_cache}")
         transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
@@ -183,7 +186,7 @@ def run_pipeline(
                     )
 
                 crop_mode = getattr(cfg.crop, "mode", "auto")
-                words_cache = clip_cache / "words.json" if use_cache else None
+                words_cache = words_cache_path(clip_cache, cfg.transcribe.engine) if use_cache else None
 
                 per_frame_persons: list[list] = []
 
@@ -343,7 +346,7 @@ def run_trailer_pipeline(
         overwrite=not use_cache,
     )
 
-    transcript_cache = trailer_cache / "full_transcript.json"
+    transcript_cache = trailer_cache / f"full_transcript_{engine_suffix(cfg.transcribe.engine)}.json"
     if use_cache and transcript_cache.exists():
         log.info(f"Reusing cached transcript: {transcript_cache}")
         transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
@@ -429,7 +432,7 @@ def run_trailer_pipeline(
         for i, q in enumerate(picks):
             progress.update(task_id, description=f"[{i+1}/{len(picks)}] cut + crop")
             seg_path = trailer_cache / f"q_{i:02d}_segment.mp4"
-            words_cache = trailer_cache / f"q_{i:02d}_words.json"
+            words_cache = trailer_cache / f"q_{i:02d}_words_{engine_suffix(cfg.transcribe.engine)}.json"
             cropped_path = trailer_cache / f"q_{i:02d}_cropped.mp4"
 
             if not seg_path.exists() or not use_cache:

@@ -13,18 +13,21 @@ audio:
 
 transcribe:
   language: null                 # null = auto-detect; set "en", "hi", etc. to force
+  engine: faster_whisper         # faster_whisper | mlx_whisper (mlx is Apple-Silicon only)
   first_pass:
     model: base                  # tiny | base | small | medium | large-v3
     compute_type: int8           # int8 (CPU), int8_float16 (MPS), float16 (GPU)
     device: auto                 # auto | cpu | cuda | mps
     max_workers: 4               # parallel chunk workers (ThreadPool)
     beam_size: 1                 # lower = faster, higher = more accurate
+    mlx_repo: mlx-community/whisper-base-mlx   # used when transcribe.engine = mlx_whisper
   second_pass:
     model: large-v3              # high-quality per-clip re-transcription
     compute_type: int8           # use "int8_float16" or "float16" only with CUDA GPU
     device: auto
     beam_size: 5                 # accuracy matters more here (subtitles)
     word_timestamps: true
+    mlx_repo: mlx-community/whisper-large-v3-mlx   # used when transcribe.engine = mlx_whisper
   cleanup:                       # LLM post-processing of second-pass words
     enabled: true
     transliterate: true          # romanize non-Latin scripts (Hindi, Urdu, Arabic, ...)

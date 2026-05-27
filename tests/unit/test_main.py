@@ -203,6 +203,7 @@ def test_parser_defaults_match_documented_pipeline_defaults() -> None:
     assert args.no_cache is False
     assert args.keep_cache is False
     assert args.verbose is False
+    assert args.whisper_engine is None
 
 
 def test_parser_mode_choices_are_reels_and_trailer_only() -> None:
@@ -235,7 +236,7 @@ def _make_minimal_cfg() -> SimpleNamespace:
     """Build the minimum cfg shape apply_cli_overrides reads/writes."""
     return SimpleNamespace(
         paths=SimpleNamespace(output_dir="outputs"),
-        transcribe=SimpleNamespace(language=None),
+        transcribe=SimpleNamespace(language=None, engine="faster_whisper"),
         llm=SimpleNamespace(provider="claude_cli"),
         analyze=SimpleNamespace(target_clips=10),
         crop=SimpleNamespace(debug_overlay=False),
@@ -255,6 +256,7 @@ def _make_default_args() -> SimpleNamespace:
         debug_detect=False,
         subtitle_style=None,
         verbose=False,
+        whisper_engine=None,
     )
 
 
@@ -352,6 +354,17 @@ def test_apply_cli_overrides_leaves_subtitles_style_when_flag_omitted() -> None:
     assert cfg.subtitles.style == "classic"
 
 
+def test_build_parser_rejects_unknown_whisper_engine() -> None:
+    """`--whisper-engine` choices are {faster_whisper, mlx_whisper} — anything else exits."""
+    parser = build_parser()
+
+    parser.parse_args(["video.mp4", "--whisper-engine", "faster_whisper"])
+    parser.parse_args(["video.mp4", "--whisper-engine", "mlx_whisper"])
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["video.mp4", "--whisper-engine", "openai_whisper"])
+
+
 def test_build_parser_rejects_unknown_subtitle_style() -> None:
     """argparse `choices=` rejects values outside {classic, pop}."""
     parser = build_parser()
@@ -369,6 +382,27 @@ def test_apply_cli_overrides_sets_subtitles_style_when_flag_pop() -> None:
     apply_cli_overrides(cfg, args)
 
     assert cfg.subtitles.style == "pop"
+
+
+def test_apply_cli_overrides_sets_transcribe_engine_when_whisper_engine_flag_given() -> None:
+    """`--whisper-engine mlx_whisper` → `cfg.transcribe.engine = 'mlx_whisper'`."""
+    cfg = _make_minimal_cfg()
+    args = _make_default_args()
+    args.whisper_engine = "mlx_whisper"
+
+    apply_cli_overrides(cfg, args)
+
+    assert cfg.transcribe.engine == "mlx_whisper"
+
+
+def test_apply_cli_overrides_leaves_transcribe_engine_when_flag_omitted() -> None:
+    """No `--whisper-engine` flag → `cfg.transcribe.engine` is not touched."""
+    cfg = _make_minimal_cfg()
+    args = _make_default_args()  # whisper_engine=None
+
+    apply_cli_overrides(cfg, args)
+
+    assert cfg.transcribe.engine == "faster_whisper"
 
 
 def test_apply_cli_overrides_sets_logging_level_to_debug_when_verbose_true() -> None:

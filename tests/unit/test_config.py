@@ -209,3 +209,39 @@ def test_load_default_config_returns_simplenamespace_with_pipeline_sections() ->
 # Real-config smoke is now covered by
 # test_load_default_config_returns_simplenamespace_with_pipeline_sections above,
 # which loads via importlib.resources from the in-package default.yaml.
+
+
+# --------------------------------------------------------------------------- #
+# transcribe engine selection
+# --------------------------------------------------------------------------- #
+
+def test_default_config_transcribe_engine_is_faster_whisper() -> None:
+    """`cfg.transcribe.engine` defaults to `faster_whisper` for back-compat.
+
+    Adding mlx-whisper as an alternative — existing users get the unchanged
+    behavior unless they explicitly switch.
+    """
+    from podclipper.config import load_default_config
+
+    cfg = load_default_config()
+
+    assert cfg.transcribe.engine == "faster_whisper"
+
+
+def test_default_config_first_pass_mlx_repo_points_to_base_model() -> None:
+    """First-pass mlx_repo defaults to the base model — matches the size used
+    for faster-whisper first-pass (fast, transcript is LLM-consumed not user-facing)."""
+    from podclipper.config import load_default_config
+
+    cfg = load_default_config()
+
+    assert cfg.transcribe.first_pass.mlx_repo == "mlx-community/whisper-base-mlx"
+
+
+def test_default_config_second_pass_mlx_repo_points_to_large_v3() -> None:
+    """Second-pass mlx_repo defaults to large-v3 — accuracy matters for captions."""
+    from podclipper.config import load_default_config
+
+    cfg = load_default_config()
+
+    assert cfg.transcribe.second_pass.mlx_repo == "mlx-community/whisper-large-v3-mlx"
