@@ -114,3 +114,7 @@ secrets.json
 *.bak
 *.orig
 .venv*
+# Generated video indexes (like outputs/, .cache/) — root-anchored so the
+# src/podclipper/index package is NOT ignored
+/index/
+/index_hi/
