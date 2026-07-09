@@ -63,6 +63,9 @@ analyze:
   min_clip_seconds: 15
   max_clip_seconds: 90
   target_clips: 8                # hint to the LLM; it may return fewer/more
+  source_limit_seconds: null     # null = whole video; N = only consider the
+                                 # first N seconds for clip selection (skips
+                                 # transcribing the rest). CLI: --limit-minutes
   transcript_timestamp_resolution: seconds    # "seconds" → [MM:SS] prefixes
   refine_bounds: true            # after the LLM picks clips and we snap to
                                  # segment boundaries, do ONE MORE per-clip

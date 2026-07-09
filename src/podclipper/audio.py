@@ -31,9 +31,11 @@ def extract_audio(
     sample_rate: int = 16000,
     codec: str = "pcm_s16le",
     overwrite: bool = False,
+    duration_limit: float | None = None,
 ) -> Path:
-    """Extract mono audio from `video_path` to `out_path`. Returns the existing
-    path unchanged when it exists and `overwrite=False`."""
+    """Extract mono audio from `video_path` to `out_path`. `duration_limit`
+    caps extraction to the first N seconds. Returns the existing path unchanged
+    when it exists and `overwrite=False`."""
     video_path = Path(video_path)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,8 +51,10 @@ def extract_audio(
         "-ac", "1",
         "-ar", str(sample_rate),
         "-c:a", codec,
-        str(out_path),
     ]
+    if duration_limit is not None:
+        cmd += ["-t", f"{duration_limit:.3f}"]
+    cmd.append(str(out_path))
     log.info(f"Extracting audio → {out_path.name} ({sample_rate} Hz, mono)")
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)

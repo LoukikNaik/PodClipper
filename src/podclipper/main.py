@@ -76,6 +76,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cap the number of reels produced (after LLM analysis)",
     )
     p.add_argument(
+        "--limit-minutes", type=float, default=None,
+        help=(
+            "Only consider the first N minutes of the source for clip "
+            "selection (skips transcribing the rest). Overrides "
+            "cfg.analyze.source_limit_seconds."
+        ),
+    )
+    p.add_argument(
         "--debug-crop", action="store_true",
         help="Render auxiliary debug video with bbox + crop overlay",
     )
@@ -116,6 +124,8 @@ def apply_cli_overrides(cfg, args) -> None:
         cfg.llm.provider = args.llm_provider
     if args.max_clips is not None:
         cfg.analyze.target_clips = args.max_clips
+    if args.limit_minutes is not None:
+        cfg.analyze.source_limit_seconds = args.limit_minutes * 60.0
     if args.debug_crop:
         cfg.crop.debug_overlay = True
     if args.debug_detect:

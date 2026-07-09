@@ -117,21 +117,29 @@ def run_pipeline(
 
     meta: VideoMeta = ingest(input_path)
 
+    source_limit = getattr(cfg.analyze, "source_limit_seconds", None)
+    analyze_duration = min(meta.duration, source_limit) if source_limit else meta.duration
+    limit_tag = f"_first{int(analyze_duration)}s" if source_limit else ""
+    if source_limit:
+        log.info(f"Source limit: considering only the first {analyze_duration:.0f}s "
+                 f"of {meta.duration:.0f}s for clip selection")
+
     cache = _cache_dir_for(cfg, input_path)
-    audio_wav = cache / "audio.wav"
+    audio_wav = cache / f"audio{limit_tag}.wav"
     extract_audio(
         meta.path, audio_wav,
         sample_rate=cfg.audio.sample_rate,
         codec=cfg.audio.codec,
         overwrite=not use_cache,
+        duration_limit=source_limit,
     )
 
-    transcript_cache = cache / "first_pass_transcript.json"
+    transcript_cache = cache / f"first_pass_transcript{limit_tag}.json"
     if use_cache and transcript_cache.exists():
         log.info(f"Reusing cached first-pass transcript: {transcript_cache}")
         transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
     else:
-        transcript = transcribe_first_pass(audio_wav, meta.duration, cfg)
+        transcript = transcribe_first_pass(audio_wav, analyze_duration, cfg)
         transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
         log.info(f"Cached first-pass transcript → {transcript_cache}")
 
@@ -142,7 +150,7 @@ def run_pipeline(
         cfg.transcribe.language = transcript.language
 
     provider = build_provider(cfg.llm)
-    clips = analyze_for_reels(transcript, meta.duration, provider, cfg, debug_cache_dir=cache)
+    clips = analyze_for_reels(transcript, analyze_duration, provider, cfg, debug_cache_dir=cache)
     if not clips:
         log.warning("LLM returned no clips — nothing to produce")
         return []
@@ -331,24 +339,32 @@ def run_trailer_pipeline(
     log.info(f"Source: {meta.path.name}  {meta.width}x{meta.height} "
              f"{meta.fps:.2f}fps  {meta.duration:.1f}s")
 
+    source_limit = getattr(cfg.analyze, "source_limit_seconds", None)
+    analyze_duration = min(meta.duration, source_limit) if source_limit else meta.duration
+    limit_tag = f"_first{int(analyze_duration)}s" if source_limit else ""
+    if source_limit:
+        log.info(f"Source limit: considering only the first {analyze_duration:.0f}s "
+                 f"of {meta.duration:.0f}s for quotable selection")
+
     cache = _cache_dir_for(cfg, input_path)
     trailer_cache = cache / "trailer"
     trailer_cache.mkdir(parents=True, exist_ok=True)
 
-    audio_wav = cache / "audio.wav"
+    audio_wav = cache / f"audio{limit_tag}.wav"
     extract_audio(
         meta.path, audio_wav,
         sample_rate=cfg.audio.sample_rate,
         codec=cfg.audio.codec,
         overwrite=not use_cache,
+        duration_limit=source_limit,
     )
 
-    transcript_cache = trailer_cache / "full_transcript.json"
+    transcript_cache = trailer_cache / f"full_transcript{limit_tag}.json"
     if use_cache and transcript_cache.exists():
         log.info(f"Reusing cached transcript: {transcript_cache}")
         transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
     else:
-        transcript = transcribe_first_pass(audio_wav, meta.duration, cfg)
+        transcript = transcribe_first_pass(audio_wav, analyze_duration, cfg)
         transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
         log.info(f"Cached transcript → {transcript_cache}")
 
@@ -363,7 +379,7 @@ def run_trailer_pipeline(
         picks = json.loads(quotables_cache.read_text())
     else:
         log.info("Asking LLM to pick 4-5 quotable sentences for the trailer...")
-        picks = pick_quotables(transcript, provider, cfg, meta.duration)
+        picks = pick_quotables(transcript, provider, cfg, analyze_duration)
         quotables_cache.write_text(json.dumps(picks, indent=2))
         log.info(f"Cached quotables → {quotables_cache}")
 
