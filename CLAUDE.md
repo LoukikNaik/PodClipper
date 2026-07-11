@@ -182,8 +182,12 @@ description — persisted in `music/library.json` (audio gitignored, manifest
 tracked). At runtime the pipeline:
 
 1. `load_library` reads the manifest (skips `disabled` songs/sections).
-2. `select_track` — a **separate LLM call** matches the reel's transcript+title
-   to a track by vibe description (falls back to random if no confident match).
+2. `select_track` — a **separate LLM call** that **scores every enabled
+   *section* 0–10** for the reel (transcript+title) in one shot and picks the
+   **argmax** (`music.min_score`, default 5.0; below it → random section).
+   Scoring is per-section (`_candidates` flattens song→sections), so the
+   selector judges the actual passage — its own vocals + context — not the
+   whole song. Below `min_score` or on parse failure → random section.
 3. `mix_music` — trims the chosen section and **loops it** to fill the reel
    (never bleeds past the section into unwanted parts), then sidechain-ducks
    it under the speech (`gain`, `duck_ratio`, `duck_release`, `fade_seconds`).
@@ -195,9 +199,15 @@ section detection. Tooling lives under `dev/` (`analyze_music.py`,
 `find_hook_auto.py`, `apply_music_to_reels.py`).
 
 Manifest shape — one entry per song, `sections[]` each with
-`{id, start, end, lyrics, description}`; `method` = `lyric` (onset pinned to a
-verified lyric) or `acoustic` (energy/beat). Descriptions are the signal the
-selector LLM reads, so write them as "vibe + when to use for a reel".
+`{id, start, end, lyrics, vocals, context, description}`; `method` = `lyric`
+(onset pinned to a verified lyric) or `acoustic` (energy/beat). The signals the
+selector LLM reads are per-section: `vocals` (the lines actually sung in that
+window, from mlx-whisper of the cut section), `context` (what that passage is
+about, grounded in its own vocals + provenance), and `description` ("vibe +
+when to use"). Grounding on the section's real vocals — not the whole song —
+is deliberate: a 30–50 s window may be one verse or an instrumental bridge with
+a different tone than the song overall (e.g. `chaudhary`'s section is vocal, not
+the instrumental its old label claimed).
 
 ## Caching layout
 

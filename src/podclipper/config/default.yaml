@@ -232,10 +232,13 @@ trailer:
   seg_out_fps: 30                # output framerate for the stitched trailer
 
 music:                           # opt-in background music from a curated library.
-                                 # A separate LLM call matches each reel to a
-                                 # track by vibe (falls back to random). CLI: --music
+                                 # A separate LLM call scores every track for the
+                                 # reel's vibe and picks the highest (falls back to
+                                 # random below min_score). CLI: --music
   enabled: false
   library_path: music/library.json
+  min_score: 5.0                 # best track must score >= this (0..10) to be used,
+                                 # else fall back to a random pick
   gain: 0.32                     # music bed level (0..1); kept well under speech
   duck_ratio: 3.0                # sidechain compression ratio (higher = music dips
                                  # more when the speaker talks)

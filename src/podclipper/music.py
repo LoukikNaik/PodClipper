@@ -48,51 +48,77 @@ def _resolve(lib: dict, song: dict) -> Path:
     return Path(lib["_dir"]) / song["file"]
 
 
-def _pick_section(song: dict) -> dict:
-    secs = song.get("sections") or []
-    return random.choice(secs) if secs else {"start": 0.0, "end": None}
+def _candidates(songs: list[dict]) -> list[tuple[dict, dict]]:
+    """Flatten to (song, section) pairs — the unit the selector scores."""
+    return [(song, sec) for song in songs for sec in (song.get("sections") or [])]
 
 
-def _track_menu(songs: list[dict]) -> str:
-    return "\n".join(f"{i}: {s['title']} — {s.get('description', '')}"
-                     for i, s in enumerate(songs))
+def _track_menu(cands: list[tuple[dict, dict]]) -> str:
+    """One numbered block per section, with the section's own vocals + context
+    so the selector scores THIS passage, not the whole song."""
+    blocks = []
+    for i, (song, sec) in enumerate(cands):
+        vocals = sec.get("vocals") or sec.get("lyrics", "")
+        blocks.append(
+            f"{i}: {song['title']}\n"
+            f"   song: {song.get('description', '')}\n"
+            f"   this section — {sec.get('context', '')}\n"
+            f"   lyrics: {vocals}\n"
+            f"   use when: {sec.get('description', '')}"
+        )
+    return "\n".join(blocks)
 
 
-def _parse_index(raw: str) -> int:
-    m = re.search(r'"index"\s*:\s*(-?\d+)', raw)
-    if m:
-        return int(m.group(1))
+def _parse_scores(raw: str) -> list[float]:
+    """Pull the `scores` array out of the selector's JSON reply; [] on failure."""
     obj = re.search(r"\{.*\}", raw, re.DOTALL)
-    if obj:
-        return int(json.loads(obj.group(0)).get("index", -1))
-    return -1
+    if not obj:
+        return []
+    try:
+        scores = json.loads(obj.group(0)).get("scores", [])
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    if not isinstance(scores, list):
+        return []
+    return [float(s) for s in scores if isinstance(s, (int, float))]
 
 
 def select_track(title: str, transcript: str, lib: dict,
                  provider, cfg: SimpleNamespace) -> Optional[dict]:
-    """LLM-match a reel to a library track; fall back to random. Returns
-    {file, start, end, song_id, section_id} or None."""
-    songs = lib["songs"]
-    idx = -1
+    """Score every library SECTION for the reel in one LLM call, pick the
+    highest; fall back to a random section if none clears `music.min_score`.
+    Returns {file, start, end, song_id, section_id} or None."""
+    cands = _candidates(lib["songs"])
+    if not cands:
+        return None
+    min_score = float(getattr(getattr(cfg, "music", SimpleNamespace()), "min_score", 5.0))
+    scores: list[float] = []
     try:
         raw = provider.complete(
             user_prompt=f"REEL TITLE: {title}\n\nTRANSCRIPT:\n{transcript}\n\n"
-                        f"AVAILABLE TRACKS:\n{_track_menu(songs)}",
+                        f"AVAILABLE TRACKS:\n{_track_menu(cands)}",
             system_prompt=load_prompt("music_selector.txt"),
-            max_tokens=300,
+            max_tokens=400,
         )
-        idx = _parse_index(raw)
+        scores = _parse_scores(raw)
     except Exception as e:  # noqa: BLE001
         log.warning(f"music selection LLM call failed ({e}); picking at random")
 
-    if 0 <= idx < len(songs):
-        song = songs[idx]
-        log.info(f"music: matched '{song['title']}' to reel '{title[:40]}'")
+    if len(scores) == len(cands):
+        best = max(range(len(cands)), key=lambda i: scores[i])
+        if scores[best] >= min_score:
+            song, section = cands[best]
+            log.info(f"music: matched '{song['title']}' / {section.get('id', '')} "
+                     f"(score {scores[best]:.0f}/10) to reel '{title[:40]}'")
+        else:
+            song, section = random.choice(cands)
+            log.info(f"music: top score {scores[best]:.0f} < {min_score:.0f} — "
+                     f"random pick '{song['title']}' / {section.get('id', '')}")
     else:
-        song = random.choice(songs)
-        log.info(f"music: no confident match — random pick '{song['title']}'")
+        song, section = random.choice(cands)
+        log.info(f"music: no usable scores — random pick '{song['title']}' / "
+                 f"{section.get('id', '')}")
 
-    section = _pick_section(song)
     return {
         "file": _resolve(lib, song),
         "start": float(section.get("start", 0.0)),
@@ -128,8 +154,11 @@ def mix_music(reel_video: Path, track: dict, out_path: Path,
         raise MusicError(f"music file missing: {src}")
 
     start = float(track["start"])
-    end = track.get("end")
-    seg_len = (float(end) - start) if end else dur
+    total = _duration(src)
+    avail = total - start
+    if avail <= 0:
+        start, avail = 0.0, total
+    seg_len = min(avail, dur)
 
     filt = (
         f"[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
@@ -142,8 +171,10 @@ def mix_music(reel_video: Path, track: dict, out_path: Path,
         f"[sp][mus]amix=inputs=2:duration=first:normalize=0[aout]"
     )
     with tempfile.TemporaryDirectory() as td:
-        # Cut the curated section, then loop IT to fill the reel — never bleed
-        # past the section boundary into unwanted (e.g. vocal) parts of the song.
+        # Play from the section start through the natural end of the song; only
+        # loop back to the start once the mp3 itself runs out (reels are short and
+        # the section start is the intended entry, so a natural continuation past
+        # the section end beats an early repeat). `end` is now advisory metadata.
         seg = Path(td) / "seg.wav"
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error",
