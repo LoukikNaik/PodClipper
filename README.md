@@ -42,23 +42,23 @@ For full-screen playback with audio inline, visit the [live demo site](https://p
 Video
   ↓ ingest        ffprobe — validate, metadata
   ↓ audio         ffmpeg — extract mono 16kHz WAV
-  ↓ transcribe    faster-whisper — fast 1st pass, parallel chunks
+  ↓ transcribe    mlx-whisper (default) — per-clip language auto-detect
   ↓ analyze       LLM — pick reel-worthy clips as JSON
   ↓ per clip:
        ├─ extract       ffmpeg cut ±2s pad
-       ├─ detect        YOLOv8 + MediaPipe face attribution
-       │                (prefers front-facing person; rejects back-of-head)
-       ├─ transcribe 2  faster-whisper large — clean word timestamps
-       │                (cached to words.json for fast re-runs)
-       ├─ diarize       pyannote.audio + mouth-motion linking
-       │                (optional; follows the active speaker in single-camera clips)
-       ├─ timeline      x-center clustering with contiguous-run threshold
-       │                + per-shot segments for multi-camera edits
-       ├─ crop          OpenCV — 9:16, EMA smoothing, look-ahead seed
-       │                across segment boundaries (so the crop follows
-       │                the speaker through a hard cut)
-       ├─ subtitles     PIL + OpenCV — karaoke word highlight + fading title
-       └─ evaluate      LLM-as-judge — publish / skip verdict + scorecard
+       ├─ detect        YOLOv8 + MediaPipe — all persons + face flags
+       ├─ transcribe 2  mlx-whisper large-v3 — clean word timestamps
+       │                (VAD + garble-retry; cached to words.json)
+       ├─ shot-classify per-frame single vs two-shot (≥2 real people)
+       ├─ crop          shot-aware 9:16:
+       │                  single  → follow-the-speaker
+       │                  stacked → two 9:8 panels, one person each
+       │                  --comedy → single performer only (no split),
+       │                             brightness+geometry rejects audience
+       │                  optional --intro-zoom punch-in → pull-out opener
+       ├─ subtitles     karaoke (classic) or 1–2-word pop overlay
+       ├─ music         optional --music — LLM-scored ducked bed from library
+       └─ evaluate      LLM-as-judge — publish / review / skip + scorecard
   ↓ outputs/<timestamp>/reel_NN_<title>.mp4
 ```
 
@@ -154,6 +154,21 @@ podclipper video.mp4 \
   --debug-detect \
   --debug-crop \
   -v
+```
+
+Feature flags:
+
+```bash
+# Comedy / single-performer footage: never split into stacked panels, lock the
+# crop on the (lit) performer and ignore the (shadowed) audience.
+podclipper standup.mp4 --comedy
+
+# Background music: an LLM scores every library section (0–10) for the reel's
+# vibe and lays the best-matching ducked bed under the speech.
+podclipper video.mp4 --music
+
+# Dopamine-hook opener + TikTok-style pop captions
+podclipper video.mp4 --intro-zoom --subtitle-style pop
 ```
 
 Run `podclipper --help` for the full list.
