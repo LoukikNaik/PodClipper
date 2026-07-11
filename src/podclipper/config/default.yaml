@@ -231,6 +231,19 @@ trailer:
                                  # actually finishes the thought)
   seg_out_fps: 30                # output framerate for the stitched trailer
 
+music:                           # opt-in background music from a curated library.
+                                 # A separate LLM call matches each reel to a
+                                 # track by vibe (falls back to random). CLI: --music
+  enabled: false
+  library_path: music/library.json
+  gain: 0.32                     # music bed level (0..1); kept well under speech
+  duck_ratio: 3.0                # sidechain compression ratio (higher = music dips
+                                 # more when the speaker talks)
+  duck_threshold: 0.04           # speech level that triggers ducking
+  duck_release: 450              # ms for music to swell back after speech (slow =
+                                 # smooth, avoids pumping)
+  fade_seconds: 0.8              # music fade-in and fade-out length
+
 evaluate:
   enabled: true                  # run LLM-as-judge after each reel is rendered
   auto_skip: false               # if true, reels with verdict "skip" are moved to skipped/ dir

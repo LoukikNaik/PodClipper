@@ -28,6 +28,7 @@ from .detect import detect_humans_per_frame, detect_humans_all_per_frame
 from .ingest import ingest
 from .llm import build_provider
 from .logging_util import get_console
+from .music import load_library, mix_music, select_track
 from .evaluate import evaluate_reel, evaluate_trailer
 from .subtitles import burn_subtitles
 from .timeline import apply_min_dwell, build_speaker_timeline, classify_wide_shot_frames
@@ -159,6 +160,12 @@ def run_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
     log.info(f"Output directory: {output_dir}")
 
+    music_lib = None
+    if getattr(getattr(cfg, "music", None), "enabled", False):
+        music_lib = load_library(Path(cfg.music.library_path))
+        if music_lib is None:
+            log.warning("music enabled but library unavailable — reels will be silent-bed")
+
     produced: list[Path] = []
 
     with Progress(
@@ -246,6 +253,17 @@ def run_pipeline(
 
                 final_path = output_dir / f"{stem}.mp4"
                 burn_subtitles(cropped_path, words, final_path, cfg, title=clip.title)
+
+                if music_lib is not None:
+                    try:
+                        transcript_text = " ".join(w.text for w in words)
+                        track = select_track(clip.title, transcript_text, music_lib, provider, cfg)
+                        if track:
+                            music_path = clip_cache / "with_music.mp4"
+                            mix_music(final_path, track, music_path, cfg)
+                            music_path.replace(final_path)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(f"[{i}] music mix skipped: {exc}")
 
                 sidecar_path = output_dir / f"{stem}.txt"
                 sidecar_path.write_text(
