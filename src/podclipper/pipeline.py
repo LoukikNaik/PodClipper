@@ -28,6 +28,7 @@ from .detect import detect_humans_per_frame, detect_humans_all_per_frame
 from .ingest import ingest
 from .llm import build_provider
 from .logging_util import get_console
+from .music import load_library, mix_music, select_track
 from .evaluate import evaluate_reel, evaluate_trailer
 from .subtitles import burn_subtitles
 from .timeline import apply_min_dwell, build_speaker_timeline, classify_wide_shot_frames
@@ -117,32 +118,38 @@ def run_pipeline(
 
     meta: VideoMeta = ingest(input_path)
 
+    source_limit = getattr(cfg.analyze, "source_limit_seconds", None)
+    analyze_duration = min(meta.duration, source_limit) if source_limit else meta.duration
+    limit_tag = f"_first{int(analyze_duration)}s" if source_limit else ""
+    if source_limit:
+        log.info(f"Source limit: considering only the first {analyze_duration:.0f}s "
+                 f"of {meta.duration:.0f}s for clip selection")
+
     cache = _cache_dir_for(cfg, input_path)
-    audio_wav = cache / "audio.wav"
+    audio_wav = cache / f"audio{limit_tag}.wav"
     extract_audio(
         meta.path, audio_wav,
         sample_rate=cfg.audio.sample_rate,
         codec=cfg.audio.codec,
         overwrite=not use_cache,
+        duration_limit=source_limit,
     )
 
-    transcript_cache = cache / "first_pass_transcript.json"
+    transcript_cache = cache / f"first_pass_transcript{limit_tag}.json"
     if use_cache and transcript_cache.exists():
         log.info(f"Reusing cached first-pass transcript: {transcript_cache}")
         transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
     else:
-        transcript = transcribe_first_pass(audio_wav, meta.duration, cfg)
+        transcript = transcribe_first_pass(audio_wav, analyze_duration, cfg)
         transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
         log.info(f"Cached first-pass transcript → {transcript_cache}")
 
-    # Pin 2nd-pass language to 1st-pass detection so Whisper doesn't flip
-    # mid-episode (Hindi/Urdu/etc. swap produces unreadable subtitles).
-    if cfg.transcribe.language is None and transcript.language:
-        log.info(f"Pinning transcribe language to first-pass detection: {transcript.language}")
-        cfg.transcribe.language = transcript.language
+    # No language pinning: the 2nd pass auto-detects per clip, so a bilingual
+    # episode transcribes each clip in its own language (forcing the episode
+    # majority language garbles the odd-language-out clips).
 
     provider = build_provider(cfg.llm)
-    clips = analyze_for_reels(transcript, meta.duration, provider, cfg, debug_cache_dir=cache)
+    clips = analyze_for_reels(transcript, analyze_duration, provider, cfg, debug_cache_dir=cache)
     if not clips:
         log.warning("LLM returned no clips — nothing to produce")
         return []
@@ -152,6 +159,12 @@ def run_pipeline(
     output_dir = Path(cfg.paths.output_dir) / run_stamp
     output_dir.mkdir(parents=True, exist_ok=True)
     log.info(f"Output directory: {output_dir}")
+
+    music_lib = None
+    if getattr(getattr(cfg, "music", None), "enabled", False):
+        music_lib = load_library(Path(cfg.music.library_path))
+        if music_lib is None:
+            log.warning("music enabled but library unavailable — reels will be silent-bed")
 
     produced: list[Path] = []
 
@@ -218,6 +231,8 @@ def run_pipeline(
                         sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
                         height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
                         smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                        min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
+                        min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
                     )
                     smart_crop_916_stacked(
                         segment_path, per_frame_persons, is_wide, cropped_path, cfg,
@@ -238,6 +253,17 @@ def run_pipeline(
 
                 final_path = output_dir / f"{stem}.mp4"
                 burn_subtitles(cropped_path, words, final_path, cfg, title=clip.title)
+
+                if music_lib is not None:
+                    try:
+                        transcript_text = " ".join(w.text for w in words)
+                        track = select_track(clip.title, transcript_text, music_lib, provider, cfg)
+                        if track:
+                            music_path = clip_cache / "with_music.mp4"
+                            mix_music(final_path, track, music_path, cfg)
+                            music_path.replace(final_path)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(f"[{i}] music mix skipped: {exc}")
 
                 sidecar_path = output_dir / f"{stem}.txt"
                 sidecar_path.write_text(
@@ -331,30 +357,36 @@ def run_trailer_pipeline(
     log.info(f"Source: {meta.path.name}  {meta.width}x{meta.height} "
              f"{meta.fps:.2f}fps  {meta.duration:.1f}s")
 
+    source_limit = getattr(cfg.analyze, "source_limit_seconds", None)
+    analyze_duration = min(meta.duration, source_limit) if source_limit else meta.duration
+    limit_tag = f"_first{int(analyze_duration)}s" if source_limit else ""
+    if source_limit:
+        log.info(f"Source limit: considering only the first {analyze_duration:.0f}s "
+                 f"of {meta.duration:.0f}s for quotable selection")
+
     cache = _cache_dir_for(cfg, input_path)
     trailer_cache = cache / "trailer"
     trailer_cache.mkdir(parents=True, exist_ok=True)
 
-    audio_wav = cache / "audio.wav"
+    audio_wav = cache / f"audio{limit_tag}.wav"
     extract_audio(
         meta.path, audio_wav,
         sample_rate=cfg.audio.sample_rate,
         codec=cfg.audio.codec,
         overwrite=not use_cache,
+        duration_limit=source_limit,
     )
 
-    transcript_cache = trailer_cache / "full_transcript.json"
+    transcript_cache = trailer_cache / f"full_transcript{limit_tag}.json"
     if use_cache and transcript_cache.exists():
         log.info(f"Reusing cached transcript: {transcript_cache}")
         transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
     else:
-        transcript = transcribe_first_pass(audio_wav, meta.duration, cfg)
+        transcript = transcribe_first_pass(audio_wav, analyze_duration, cfg)
         transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
         log.info(f"Cached transcript → {transcript_cache}")
 
-    if cfg.transcribe.language is None and transcript.language:
-        log.info(f"Pinning transcribe language to first-pass detection: {transcript.language}")
-        cfg.transcribe.language = transcript.language
+    # No language pinning — 2nd pass auto-detects per clip (see run_pipeline).
 
     provider = build_provider(cfg.llm)
     quotables_cache = trailer_cache / "quotables.json"
@@ -363,7 +395,7 @@ def run_trailer_pipeline(
         picks = json.loads(quotables_cache.read_text())
     else:
         log.info("Asking LLM to pick 4-5 quotable sentences for the trailer...")
-        picks = pick_quotables(transcript, provider, cfg, meta.duration)
+        picks = pick_quotables(transcript, provider, cfg, analyze_duration)
         quotables_cache.write_text(json.dumps(picks, indent=2))
         log.info(f"Cached quotables → {quotables_cache}")
 
@@ -451,6 +483,8 @@ def run_trailer_pipeline(
                     sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
                     height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
                     smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                    min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
+                    min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
                 )
                 smart_crop_916_stacked(seg_path, per_frame_persons, is_wide, cropped_path, cfg)
             cropped_clips.append(cropped_path)

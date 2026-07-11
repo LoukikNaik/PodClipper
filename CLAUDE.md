@@ -29,20 +29,22 @@ one row per name, no sections. Keep it that way.
 Source video
   ↓  ingest             ffprobe metadata
   ↓  audio              ffmpeg → 16 kHz mono WAV
-  ↓  transcribe (1st)   faster-whisper base, parallel chunks
+  ↓  transcribe (1st)   mlx-whisper base, per-clip language auto-detect
   ↓  analyze            Claude picks reel-worthy clips (JSON list)
   │
   ↓  per clip:
   │     extract         ffmpeg cut with ±2 s pad
   │     detect          YOLOv8 person bboxes + MediaPipe face attribution
-  │     transcribe (2)  faster-whisper large-v3 (cached to words.json)
-  │     shot-classify   per-frame single vs wide (≥2 people)
+  │     transcribe (2)  mlx-whisper large-v3 (VAD + garble-retry, cached)
+  │     shot-classify   per-frame single vs two-shot (≥2 real people)
   │     crop            shot-aware:
   │                       single  → 9:16 follow-the-speaker
   │                       stacked → two 9:8 panels, one person each
-  │                       (pose-anchored, body-IoU lock, lerp transitions)
+  │                       (pose-anchored, body-IoU lock, lerp + snap-on-cut)
+  │                     optional --intro-zoom punch-in→pull-out opener
   │     subtitles       karaoke (classic) or 1-2-word pop overlay
   │                     cfg.subtitles.style picks the renderer
+  │     music           optional --music: LLM-matched ducked bed from library
   │     evaluate        LLM-as-judge scorecard + publish/review/skip verdict
   │
   ↓  outputs/<timestamp>/reel_NN_<slug>.mp4
@@ -56,13 +58,14 @@ Source video
 | `src/podclipper/pipeline.py` | Orchestrator. Holds the per-clip loop and the `crop.mode` branch. |
 | `src/podclipper/ingest.py` | ffprobe wrapper, returns `VideoMeta`. |
 | `src/podclipper/audio.py` | Whole-video audio extraction. |
-| `src/podclipper/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). |
+| `src/podclipper/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). Engine behind `cfg.transcribe.engine` = `mlx` (default, Apple-Silicon GPU) \| `faster`. Auto-detects language per clip; VAD + `condition_on_previous_text=false` guard against hallucination; garble-retry re-runs with `fallback_languages` when auto-detect returns a suspiciously sparse transcript. |
 | `src/podclipper/transcribe_cleanup.py` | LLM post-pass to fix Whisper mis-spellings / transliterate non-Latin. |
 | `src/podclipper/analyze.py` | LLM clip selection — reads transcript, returns `Clip[]`. |
 | `src/podclipper/llm/` | Provider abstraction. `claude_cli.py` (default, configurable timeout), `litellm_provider.py` (unified gateway: Anthropic, OpenAI, Gemini, Groq, Ollama, ...). |
 | `src/podclipper/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |
-| `src/podclipper/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the new shot-aware path. |
-| `src/podclipper/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and new `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel). |
+| `src/podclipper/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the shot-aware path — two-shot = ≥2 people above a min-size **floor** (`shot_min_person_frac`, ignores tiny background people) separated by ≥`shot_sep_frac`, with an optional min-dwell debounce. |
+| `src/podclipper/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel; body-IoU lock + lerp + **snap-on-cut**, optional intro-zoom, `debug_out` horizontal overlay). |
+| `src/podclipper/music.py` | Optional background music: `load_library` (manifest), `select_track` (LLM vibe-match → random fallback), `mix_music` (ducked bed, loops the section to fill the reel). Behind `--music`. |
 | `src/podclipper/subtitles.py` | Two renderers: `_burn_classic` (karaoke word highlight + fading title + audio fade-out) and `_burn_pop` (1–2 huge sheared words, alternating highlight color). `burn_subtitles` dispatches by `cfg.subtitles.style` (`classic` \| `pop`). |
 | `src/podclipper/evaluate.py` | LLM-as-judge scorer; writes `verdict` + numeric scores into reel sidecar. |
 | `src/podclipper/diarize.py` | **No longer in the hot path.** pyannote.audio + mouth-motion linking; kept for reference / single-locked-camera future use. |
@@ -80,9 +83,13 @@ diarization-driven crop that had jitter and mis-framing in wide shots.
 **Per frame:**
 
 1. YOLO detects all persons in the frame.
-2. **Shot classifier** (`classify_wide_shot_frames`) — frame is `wide` iff
-   ≥ 2 person bboxes, each shorter than 70 % of source height, separated
-   by ≥ 20 % of source width. Temporally smoothed over 15 frames.
+2. **Shot classifier** (`classify_wide_shot_frames`) — frame is a two-shot
+   iff ≥ 2 people **taller than `shot_min_person_frac` (0.20) of source
+   height** (a size *floor* that ignores tiny background people/posters) and
+   separated by ≥ 20 % of width. Temporally smoothed (15 frames), optional
+   min-dwell debounce. NB: this used to be a size *cap* ("both people small =
+   wide establishing shot"), which wrongly read seated podcast guests filling
+   70–90 % of frame as close-ups; a floor matches "2 real people → stack".
 3. **Single mode** → one 9:16 crop centered on the largest person.
    **Wide mode** → two 9:8 stacked panels: leftmost person on top,
    rightmost on bottom (each tightly framed on their face + shoulders
@@ -94,8 +101,11 @@ diarization-driven crop that had jitter and mis-framing in wide shots.
   IoU stays ≥ 0.7 vs the body bbox at the moment we last set the crop.
   Below 0.7 → recompute crop from new pose anchors.
 - **Lerp transitions**: when the lock breaks, the rendered crop **lerps**
-  toward the new target over 12 frames (~0.4 s @ 30 fps) — each
-  lock-break becomes a tiny pan-zoom instead of a 1-frame snap.
+  toward the new target over ~16 frames — each lock-break becomes a tiny
+  pan-zoom instead of a 1-frame snap.
+- **Snap-on-cut**: but when the body-IoU collapses below `snap_cut_iou`
+  (0.15) — a source *camera cut*, person jumped — snap instantly instead
+  of gliding (a glide after a hard cut reads as shake).
 - **Miss tolerance**: if YOLO or Pose Landmarker fails for ≤ 15 frames
   in a row, hold the last lock. Bridges brief dropouts.
 - **Snap-to-target**: when rendered is within 1 px of target, snap
@@ -107,12 +117,15 @@ hysteresis signal means only real human movement triggers crop updates,
 not landmark noise.
 
 Tunable knobs (`src/podclipper/config/default.yaml` → `crop:`):
-- `stacked_iou_threshold` (0.70) — lower = more lock retention
-- `stacked_transition_frames` (12) — higher = smoother but slower settle
+- `stacked_iou_threshold` (0.50) — lower = more lock retention
+- `snap_cut_iou` (0.15) — below this overlap = a cut → snap, don't glide
+- `stacked_transition_frames` (16) — higher = smoother but slower settle
 - `stacked_miss_tolerance` (15) — bridge this many bad frames
 - `stacked_snap_px` (8) — snap crop dims to multiples of this
-- `shot_sep_frac` (0.20), `shot_height_cap_frac` (0.70),
-  `shot_smooth_window_frames` (15) — wide-shot detector
+- `shot_sep_frac` (0.20), `shot_min_person_frac` (0.20),
+  `shot_smooth_window_frames` (15), `shot_min_dwell_frames` (0),
+  `shot_height_cap_frac` (1.0 = off) — two-shot detector
+- `intro_zoom.{enabled,duration_seconds,max_zoom}` — the --intro-zoom opener
 
 ## The pop subtitle path (optional)
 
@@ -150,6 +163,41 @@ Tunable knobs (`src/podclipper/config/default.yaml` → `subtitles.pop:`):
 The classic path stays bit-identical when `style == "classic"` —
 `burn_subtitles` is a thin dispatcher to `_burn_classic` (body unchanged
 from before the pop feature) or `_burn_pop`.
+
+## The intro-zoom opener (optional)
+
+`--intro-zoom` (or `cfg.crop.intro_zoom.enabled`) makes each reel open
+**punched-in on the subject and ease out** to the normal framing over
+`duration_seconds` (0.7) via an eased center digital zoom — a scroll-stopper
+"dopamine" hook. Applied in both the single and stacked crop paths
+(`_apply_intro_zoom` on the composed 1080×1920 frame). Off by default →
+existing runs bit-identical.
+
+## The background-music path (optional)
+
+`--music` (or `cfg.music.enabled`) lays a ducked music bed under each reel.
+The **library is curated offline** (by Claude Code, not the runtime): songs
+downloaded, their genuine hit-sections found, and each tagged with a vibe
+description — persisted in `music/library.json` (audio gitignored, manifest
+tracked). At runtime the pipeline:
+
+1. `load_library` reads the manifest (skips `disabled` songs/sections).
+2. `select_track` — a **separate LLM call** matches the reel's transcript+title
+   to a track by vibe description (falls back to random if no confident match).
+3. `mix_music` — trims the chosen section and **loops it** to fill the reel
+   (never bleeds past the section into unwanted parts), then sidechain-ducks
+   it under the speech (`gain`, `duck_ratio`, `duck_release`, `fade_seconds`).
+
+Section anchoring for vocal songs uses **web lyrics + mlx-whisper**: identify
+the hook line, then a cut→transcribe-the-clip→correct loop pins its exact
+onset (defeats whole-song timestamp drift). Instrumentals use energy/beat
+section detection. Tooling lives under `dev/` (`analyze_music.py`,
+`find_hook_auto.py`, `apply_music_to_reels.py`).
+
+Manifest shape — one entry per song, `sections[]` each with
+`{id, start, end, lyrics, description}`; `method` = `lyric` (onset pinned to a
+verified lyric) or `acoustic` (energy/beat). Descriptions are the signal the
+selector LLM reads, so write them as "vibe + when to use for a reel".
 
 ## Caching layout
 
@@ -194,6 +242,15 @@ podclipper video.mp4 -c my-overrides.yaml
 
 # Pop subtitle style (TikTok-style 1-2 huge sheared words at a time)
 podclipper video.mp4 --subtitle-style pop
+
+# Intro zoom (punch-in → pull-out opener) + background music (LLM-matched bed)
+podclipper video.mp4 --intro-zoom --music
+
+# Only consider the first N minutes for clip selection (no re-encode of the rest)
+podclipper video.mp4 --limit-minutes 20
+
+# Transcription engine (mlx is default; faster-whisper on non-Apple / CUDA)
+podclipper video.mp4 --whisper-engine faster
 
 # Force legacy single-crop path
 # (set cfg.crop.mode to "single" in your override config)
@@ -249,9 +306,17 @@ problem by showing both people whenever the source goes wide.
   MediaPipe FaceLandmarker fails on the small faces in wide shots. The
   shot detector deliberately uses pure bbox geometry — no face-attribution
   requirement — so it still works at low res.
-- **Whisper's `int8` on CPU** is the default and works on Apple Silicon
-  without GPU config. For CUDA, switch to `int8_float16` / `float16` in
-  config.
+- **mlx-whisper is the default engine** (Apple-Silicon GPU) and is markedly
+  better than faster-whisper on accented/sung/code-switched audio. Its first
+  pass runs **sequentially** — the numba backend isn't thread-safe and aborts
+  under the ThreadPool. Use `--whisper-engine faster` on non-Apple / CUDA
+  (that path keeps the parallel chunks and the `int8` compute types).
+- **Language: auto-detect per clip, don't force globally.** Forcing `--language
+  en` makes Whisper *translate* Hindi to English; forcing `hi` garbles English.
+  Auto-detect keeps each clip in its own language; the **garble-retry** safety
+  net re-runs with `fallback_languages` only when auto returns a suspiciously
+  sparse transcript (the accented-English-heard-as-Hindi failure). The old
+  episode-level language pinning was removed — it broke odd-language-out clips.
 - **Audio doesn't leave the machine — transcript does.** The `100% Local`
   framing on the landing page refers to audio. LLM clip selection sends
   the transcript to Claude (CLI or API).

@@ -116,7 +116,23 @@ The pipeline runs without it — it just won't follow speaker turns visually in 
 - `yolov8n.pt` (6 MB) — auto-downloaded by ultralytics on first run.
 - MediaPipe face detector + landmarker — auto-downloaded to `.cache/`.
 - Whisper models (`base`, `large-v3`) — auto-downloaded from HuggingFace.
-- Default compute type is `int8` on CPU (works on Apple Silicon out of the box). For CUDA, set `float16` / `int8_float16` in config.
+
+### Transcription engine
+
+The default is **mlx-whisper** (Apple-Silicon GPU — best quality and speed).
+It's installed automatically only on Apple Silicon (platform-marked dependency).
+
+**Not on an Apple-Silicon Mac?** No action needed — if mlx-whisper isn't
+installed/importable, PodClipper automatically falls back to **faster-whisper**
+(CPU/CUDA). To force it explicitly (or silence the fallback warning):
+
+```bash
+podclipper video.mp4 --whisper-engine faster
+# or set  transcribe.engine: faster  in an override config
+```
+
+faster-whisper's default compute type is `int8` on CPU (works out of the box);
+for CUDA set `float16` / `int8_float16` in config.
 
 ## Usage
 

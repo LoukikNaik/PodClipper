@@ -137,6 +137,7 @@ def smart_crop_916(
         raise CropError(f"OpenCV could not open {source_video}")
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    iz_frames, iz_max = _intro_zoom_params(cfg, fps)
     src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
@@ -207,6 +208,7 @@ def smart_crop_916(
                 cropped = cv2.copyMakeBorder(cropped, 0, 0, 0, pad, cv2.BORDER_CONSTANT)
 
             resized = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_AREA)
+            resized = _apply_intro_zoom(resized, frame_idx, iz_frames, iz_max)
 
             try:
                 encoder.stdin.write(resized.tobytes())
@@ -406,6 +408,32 @@ def _render_from_bbox(frame: np.ndarray, bbox: tuple[int, int, int, int],
                       interpolation=cv2.INTER_AREA)
 
 
+def _intro_zoom_params(cfg: SimpleNamespace, fps: float) -> tuple[int, float]:
+    """Return (n_frames, max_zoom) for the intro punch-in; (0, 1.0) if disabled."""
+    iz = getattr(cfg.crop, "intro_zoom", None)
+    if not iz or not getattr(iz, "enabled", False):
+        return 0, 1.0
+    n = int(round(float(getattr(iz, "duration_seconds", 0.7)) * fps))
+    return max(0, n), float(getattr(iz, "max_zoom", 1.35))
+
+
+def _apply_intro_zoom(frame: np.ndarray, frame_idx: int, n_frames: int,
+                      max_zoom: float) -> np.ndarray:
+    """Center digital zoom easing from max_zoom (tight) out to 1.0 over n_frames."""
+    if n_frames <= 0 or frame_idx >= n_frames:
+        return frame
+    p = frame_idx / n_frames
+    eased = 1.0 - (1.0 - p) ** 3
+    z = max_zoom + (1.0 - max_zoom) * eased
+    if z <= 1.0001:
+        return frame
+    h, w = frame.shape[:2]
+    cw, ch = max(1, int(round(w / z))), max(1, int(round(h / z)))
+    x0, y0 = (w - cw) // 2, (h - ch) // 2
+    return cv2.resize(frame[y0:y0 + ch, x0:x0 + cw], (w, h),
+                      interpolation=cv2.INTER_LINEAR)
+
+
 def _fallback_single_panel(
     frame: np.ndarray, cx: float, src_w: int, src_h: int,
     panel_w: int, panel_h: int, panel_aspect: float,
@@ -426,6 +454,7 @@ def smart_crop_916_stacked(
     is_wide: "np.ndarray",
     out_path: Path,
     cfg: SimpleNamespace,
+    debug_out: Path | None = None,
 ) -> Path:
     """Shot-aware 9:16 renderer: single panel for close-ups, stacked dual
     panels (9:8 each) for wide shots. Pose-anchored framing with body-bbox
@@ -443,6 +472,7 @@ def smart_crop_916_stacked(
     single_aspect = target_w / target_h
 
     iou_threshold = float(getattr(cfg.crop, "stacked_iou_threshold", 0.70))
+    snap_cut_iou = float(getattr(cfg.crop, "snap_cut_iou", 0.15))
     miss_tolerance = int(getattr(cfg.crop, "stacked_miss_tolerance", 15))
     snap_px = int(getattr(cfg.crop, "stacked_snap_px", 8))
     height_cap_frac = float(getattr(cfg.crop, "shot_height_cap_frac", 0.70))
@@ -455,6 +485,7 @@ def smart_crop_916_stacked(
     if not cap.isOpened():
         raise CropError(f"OpenCV could not open {source_video}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    iz_frames, iz_max = _intro_zoom_params(cfg, fps)
     src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     height_cap = height_cap_frac * src_h
@@ -470,6 +501,12 @@ def smart_crop_916_stacked(
 
     tmp_video = Path(tempfile.mkstemp(prefix="ave_stack_", suffix=".mp4")[1])
     encoder = _open_ffmpeg_pipe(tmp_video, target_w, target_h, fps, cfg)
+
+    debug_encoder = None
+    debug_tmp = None
+    if debug_out is not None:
+        debug_tmp = Path(tempfile.mkstemp(prefix="ave_stackdbg_", suffix=".mp4")[1])
+        debug_encoder = _open_ffmpeg_pipe(debug_tmp, src_w, src_h, fps, cfg)
 
     # Per-slot lock state:
     #   body:     YOLO body bbox when target was set (the hysteresis signal —
@@ -572,6 +609,7 @@ def smart_crop_916_stacked(
                 bot_panel = _panel_with_pose("bot", frame, bot_b)
                 composite = np.vstack([top_panel, bot_panel])
                 composite[panel_h - 1:panel_h + 1, :] = (10, 10, 10)
+                dbg_boxes = [state["top"]["rendered"], state["bot"]["rendered"]]
             else:
                 s = state["single"]
                 chosen: Optional[BBox] = None
@@ -595,8 +633,9 @@ def smart_crop_916_stacked(
                         locked = (max(0, (src_w - crop_w) // 2), 0, crop_w, crop_h)
                 else:
                     cur_body = _bbox_to_tuple(chosen)
-                    if (s["body"] is not None and s["target"] is not None
-                            and _bbox_iou_tuple(cur_body, s["body"]) >= iou_threshold):
+                    iou = (_bbox_iou_tuple(cur_body, s["body"])
+                           if s["body"] is not None else 0.0)
+                    if s["target"] is not None and s["body"] is not None and iou >= iou_threshold:
                         s["miss"] = 0
                     else:
                         s["miss"] = 0
@@ -607,10 +646,23 @@ def smart_crop_916_stacked(
                         x0 = max(0, min(src_w - crop_w, x0))
                         s["target"] = (x0, 0, crop_w, crop_h)
                         s["body"] = cur_body
+                        # hard cut / big jump (near-zero overlap) → snap, don't glide
+                        if s["rendered"] is not None and iou < snap_cut_iou:
+                            s["rendered"] = s["target"]
                     locked = _advance_render(s)
 
                 composite = _render_from_bbox(frame, locked, target_w, target_h)
+                dbg_boxes = [locked]
 
+            composite = _apply_intro_zoom(composite, frame_idx, iz_frames, iz_max)
+            if debug_encoder is not None:
+                dbg = frame.copy()
+                for bb in dbg_boxes:
+                    if bb is None:
+                        continue
+                    x, y, bw, bh = (int(v) for v in bb)
+                    cv2.rectangle(dbg, (x, y), (x + bw, y + bh), (0, 255, 0), 4)
+                debug_encoder.stdin.write(dbg.tobytes())
             try:
                 encoder.stdin.write(composite.tobytes())
             except BrokenPipeError as e:
@@ -631,6 +683,13 @@ def smart_crop_916_stacked(
         _mux_audio(source_video, tmp_video, out_path)
     finally:
         tmp_video.unlink(missing_ok=True)
+
+    if debug_encoder is not None and debug_tmp is not None:
+        debug_encoder.stdin.close()
+        debug_encoder.wait(timeout=180)
+        _mux_audio(source_video, debug_tmp, debug_out)
+        debug_tmp.unlink(missing_ok=True)
+        log.info(f"Stacked crop debug (horizontal + crop box) → {debug_out}")
 
     log.info(f"Stacked crop complete → {out_path}")
     return out_path

@@ -7,6 +7,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _load_dotenv(path: Path = Path(".env")) -> None:
@@ -68,12 +69,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force Whisper language (e.g. 'en', 'hi'). Default: auto-detect",
     )
     p.add_argument(
+        "--whisper-engine", choices=["mlx", "faster"], default=None,
+        help="Transcription engine: mlx (default, Apple-Silicon GPU) or faster "
+             "(faster-whisper CPU/CUDA). Overrides cfg.transcribe.engine",
+    )
+    p.add_argument(
         "--llm-provider", choices=["claude_cli", "litellm"], default=None,
         help="Override config.llm.provider",
     )
     p.add_argument(
         "--max-clips", type=int, default=None,
         help="Cap the number of reels produced (after LLM analysis)",
+    )
+    p.add_argument(
+        "--limit-minutes", type=float, default=None,
+        help=(
+            "Only consider the first N minutes of the source for clip "
+            "selection (skips transcribing the rest). Overrides "
+            "cfg.analyze.source_limit_seconds."
+        ),
     )
     p.add_argument(
         "--debug-crop", action="store_true",
@@ -101,6 +115,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override cfg.subtitles.style (classic karaoke vs pop 1-2-word style)",
     )
     p.add_argument(
+        "--intro-zoom", action="store_true",
+        help="Start each reel punched-in on the subject and pull out to normal "
+             "framing over the first ~0.7s (sets cfg.crop.intro_zoom.enabled)",
+    )
+    p.add_argument(
+        "--music", action="store_true",
+        help="Lay a background-music bed under each reel, LLM-matched from the "
+             "curated library (sets cfg.music.enabled)",
+    )
+    p.add_argument(
         "-v", "--verbose", action="store_true",
         help="Enable DEBUG-level logging",
     )
@@ -112,16 +136,28 @@ def apply_cli_overrides(cfg, args) -> None:
         cfg.paths.output_dir = str(args.output_dir)
     if args.language is not None:
         cfg.transcribe.language = args.language
+    if args.whisper_engine is not None:
+        cfg.transcribe.engine = args.whisper_engine
     if args.llm_provider is not None:
         cfg.llm.provider = args.llm_provider
     if args.max_clips is not None:
         cfg.analyze.target_clips = args.max_clips
+    if args.limit_minutes is not None:
+        cfg.analyze.source_limit_seconds = args.limit_minutes * 60.0
     if args.debug_crop:
         cfg.crop.debug_overlay = True
     if args.debug_detect:
         cfg.detect.debug_overlay = True
     if args.subtitle_style is not None:
         cfg.subtitles.style = args.subtitle_style
+    if args.intro_zoom:
+        if not hasattr(cfg.crop, "intro_zoom"):
+            cfg.crop.intro_zoom = SimpleNamespace()
+        cfg.crop.intro_zoom.enabled = True
+    if args.music:
+        if not hasattr(cfg, "music"):
+            cfg.music = SimpleNamespace()
+        cfg.music.enabled = True
     if args.verbose:
         cfg.logging.level = "DEBUG"
 

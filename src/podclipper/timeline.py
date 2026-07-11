@@ -279,28 +279,53 @@ def apply_min_dwell(timeline: Timeline, min_dwell_seconds: float) -> Timeline:
     return out
 
 
+def _min_dwell_debounce(flags: "np.ndarray", min_frames: int) -> "np.ndarray":
+    """Only switch layout state after the new state has held for `min_frames`
+    continuously — so brief two-shot cuts don't flip to stacked."""
+    if min_frames <= 1 or len(flags) == 0:
+        return flags
+    out = flags.copy()
+    stable = bool(flags[0])
+    pending_count = 0
+    for i in range(len(flags)):
+        if bool(flags[i]) == stable:
+            pending_count = 0
+        else:
+            pending_count += 1
+            if pending_count >= min_frames:
+                stable = bool(flags[i])
+                pending_count = 0
+        out[i] = stable
+    return out
+
+
 def classify_wide_shot_frames(
     per_frame_persons: list[list[BBox]],
     source_width: int,
     source_height: int,
     sep_threshold_frac: float = 0.20,
-    height_cap_frac: float = 0.70,
+    height_cap_frac: float = 1.0,
     smooth_window_frames: int = 15,
+    min_dwell_frames: int = 0,
+    min_person_frac: float = 0.20,
 ) -> "np.ndarray":
-    """Per-frame wide-shot flag (two visible people) from YOLO bbox geometry.
-    Raw wide = ≥2 bboxes each <`height_cap_frac` tall AND separated by
-    ≥`sep_threshold_frac` of source width; smoothed by majority over
-    `smooth_window_frames`."""
+    """Per-frame wide-shot flag (two real people on screen) from YOLO bbox
+    geometry. Raw wide = ≥2 people that are foreground (taller than
+    `min_person_frac` of the frame — ignores tiny background people/posters)
+    AND separated by ≥`sep_threshold_frac` of source width. `height_cap_frac`
+    is an optional upper bound (default 1.0 = off). Smoothed by majority over
+    `smooth_window_frames`, then a min-dwell debounce."""
     n = len(per_frame_persons)
     if n == 0:
         return np.zeros(0, dtype=bool)
 
     sep_thresh = sep_threshold_frac * source_width
     height_cap = height_cap_frac * source_height
+    height_floor = min_person_frac * source_height
 
     raw = np.zeros(n, dtype=bool)
     for i, persons in enumerate(per_frame_persons):
-        qual = [p.x_center for p in persons if p.h < height_cap]
+        qual = [p.x_center for p in persons if height_floor <= p.h <= height_cap]
         if len(qual) >= 2 and (max(qual) - min(qual)) >= sep_thresh:
             raw[i] = True
 
@@ -311,4 +336,4 @@ def classify_wide_shot_frames(
         lo = max(0, i - half)
         hi = min(n, i + half + 1)
         out[i] = raw[lo:hi].mean() >= 0.5
-    return out
+    return _min_dwell_debounce(out, int(min_dwell_frames))
