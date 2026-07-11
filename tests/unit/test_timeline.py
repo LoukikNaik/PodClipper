@@ -57,11 +57,23 @@ def test_classify_wide_shot_marks_wide_when_two_short_separated_persons() -> Non
     assert out.all()
 
 
-def test_classify_wide_shot_marks_false_when_persons_too_tall() -> None:
-    """Persons taller than `height_cap_frac` (default 0.70) → not qualifying as wide."""
-    # source 1920x1080, both persons 900 tall (> 756 = 0.70*1080)
+def test_classify_wide_shot_marks_wide_when_two_tall_seated_persons() -> None:
+    """Two big seated people (900 tall = 83% of frame) are still a two-shot — the
+    floor model has no upper size cap, unlike the old 0.70 height cap."""
     persons = [
         [_bbox(100, 50, 300, 900), _bbox(1400, 50, 300, 900)]
+        for _ in range(30)
+    ]
+    out = classify_wide_shot_frames(persons, source_width=1920, source_height=1080)
+    assert out.all()
+
+
+def test_classify_wide_shot_ignores_tiny_background_person() -> None:
+    """A tiny background person (below shot_min_person_frac) doesn't count toward a
+    two-shot, so a single foreground subject stays single."""
+    # foreground person + a tiny 100px (< 0.20*1080=216) background detection
+    persons = [
+        [_bbox(300, 100, 400, 700), _bbox(1500, 300, 80, 100)]
         for _ in range(30)
     ]
     out = classify_wide_shot_frames(persons, source_width=1920, source_height=1080)

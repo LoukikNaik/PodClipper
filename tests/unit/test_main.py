@@ -249,11 +249,15 @@ def _make_default_args() -> SimpleNamespace:
     return SimpleNamespace(
         output_dir=None,
         language=None,
+        whisper_engine=None,
         llm_provider=None,
         max_clips=None,
+        limit_minutes=None,
         debug_crop=False,
         debug_detect=False,
         subtitle_style=None,
+        intro_zoom=False,
+        music=False,
         verbose=False,
     )
 
