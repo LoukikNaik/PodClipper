@@ -133,19 +133,38 @@ crop:
   # each <height_cap_frac of source height AND separated by >=sep_frac of
   # source width, the frame is "wide" and gets stacked dual-panel rendering.
   shot_sep_frac: 0.20
-  shot_height_cap_frac: 0.70
+  shot_min_person_frac: 0.20      # a person counts toward a two-shot only if TALLER
+                                  # than this fraction of frame height — ignores tiny
+                                  # background people / wall posters. Two real people
+                                  # (above the floor) + separated → stack, regardless of
+                                  # how big they are.
+  shot_height_cap_frac: 1.0       # optional upper bound (1.0 = off). Was a "wide shots
+                                  # only" heuristic that wrongly skipped seated two-shots.
   shot_smooth_window_frames: 15   # 0.5s @ 30fps; majority rule for shot-type
+  shot_min_dwell_frames: 0        # 0 = stack as soon as a two-shot appears (any
+                                  # duration); raise to require the two-shot to
+                                  # persist N frames before switching layout
   # Per-panel framing (auto mode): pose-anchored crop with body-bbox IoU
   # hysteresis. Crop bbox stays locked while body IoU >= threshold; only
   # updates when the speaker actually moves enough.
-  stacked_iou_threshold: 0.70
+  stacked_iou_threshold: 0.50     # lower = crop holds through gestures/leans (less
+                                  # twitchy re-framing); only real movement re-frames
+  snap_cut_iou: 0.15              # below this body-overlap the change is a source cut
+                                  # (person jumped) → snap the crop instantly instead
+                                  # of gliding (a glide after a cut reads as shake)
   stacked_miss_tolerance: 15      # hold lock during up to N consecutive misses
   stacked_snap_px: 8              # snap crop dims to multiples of this for stability
   stacked_top_is_right: false     # false: leftmost person in top panel; true: rightmost
-  stacked_transition_frames: 12   # when lock breaks, lerp crop bbox over this many
+  stacked_transition_frames: 16   # when lock breaks, lerp crop bbox over this many
                                   # frames (~0.4s @ 30fps). Higher = smoother but
                                   # slower to settle on a new framing. Set to 1 for
                                   # the old hard-cut behavior.
+  intro_zoom:                     # opt-in "dopamine" hook: first frames start
+                                  # punched-in on the subject and ease out to the
+                                  # normal framing. CLI: --intro-zoom
+    enabled: false
+    duration_seconds: 0.7         # how long the pull-out takes
+    max_zoom: 1.35                # starting zoom factor (1.0 = no zoom)
 
 subtitles:
   style: "classic"               # "classic" = current karaoke line; "pop" = 1-2 huge words at a time

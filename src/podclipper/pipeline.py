@@ -224,6 +224,8 @@ def run_pipeline(
                         sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
                         height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
                         smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                        min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
+                        min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
                     )
                     smart_crop_916_stacked(
                         segment_path, per_frame_persons, is_wide, cropped_path, cfg,
@@ -463,6 +465,8 @@ def run_trailer_pipeline(
                     sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
                     height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
                     smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                    min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
+                    min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
                 )
                 smart_crop_916_stacked(seg_path, per_frame_persons, is_wide, cropped_path, cfg)
             cropped_clips.append(cropped_path)
