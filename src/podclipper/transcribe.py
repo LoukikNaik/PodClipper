@@ -43,6 +43,27 @@ def _mlx_repo(model_size: str) -> str:
     return f"mlx-community/whisper-{model_size}-mlx"
 
 
+def _mlx_available() -> bool:
+    try:
+        import mlx_whisper  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_engine(engine: str) -> str:
+    """mlx-whisper needs Apple Silicon + `pip install mlx-whisper`. If it's the
+    requested engine but unavailable, fall back to faster-whisper so the default
+    never crashes off-Mac."""
+    if engine == "mlx" and not _mlx_available():
+        log.warning(
+            "mlx-whisper not available (needs Apple Silicon + `pip install mlx-whisper`) "
+            "— falling back to faster-whisper. Pass --whisper-engine faster to silence this."
+        )
+        return "faster"
+    return engine
+
+
 def _get_model(model_size: str, compute_type: str, device: str):
     from faster_whisper import WhisperModel
     resolved_device = _resolve_device(device)
@@ -202,7 +223,7 @@ def transcribe_first_pass(
 ) -> Transcript:
     """Parallel-chunk transcription of the full video audio for LLM analysis."""
     fp = cfg.transcribe.first_pass
-    engine = getattr(cfg.transcribe, "engine", "mlx")
+    engine = _resolve_engine(getattr(cfg.transcribe, "engine", "mlx"))
     model = _mlx_repo(fp.model) if engine == "mlx" else _get_model(fp.model, fp.compute_type, fp.device)
     language = cfg.transcribe.language
     log.info(f"First-pass engine: {engine} ({fp.model})")
@@ -269,7 +290,7 @@ def transcribe_second_pass(
     """High-quality single-shot transcription of an extracted clip; returns
     word-level timestamps, clip-relative."""
     sp = cfg.transcribe.second_pass
-    engine = getattr(cfg.transcribe, "engine", "mlx")
+    engine = _resolve_engine(getattr(cfg.transcribe, "engine", "mlx"))
     model = _mlx_repo(sp.model) if engine == "mlx" else _get_model(sp.model, sp.compute_type, sp.device)
 
     audio = _decode_audio_to_float32(clip_audio_or_video)

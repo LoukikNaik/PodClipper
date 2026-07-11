@@ -27,6 +27,10 @@ classifiers = [
 
 dependencies = [
     "faster-whisper>=1.1.0",
+    # Default transcription engine (Apple-Silicon GPU). Platform-marked so pip
+    # skips it where there are no wheels (non-Apple-Silicon); the code falls
+    # back to faster-whisper when mlx-whisper isn't importable.
+    "mlx-whisper>=0.4; platform_system == 'Darwin' and platform_machine == 'arm64'",
     "ultralytics>=8.3.0",
     "opencv-python>=4.10",
     "numpy>=1.26",
