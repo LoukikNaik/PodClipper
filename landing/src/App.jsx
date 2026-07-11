@@ -192,6 +192,30 @@ const EPISODES = [
       },
     ],
   },
+  {
+    youtubeId: 'KdTGjYFu2RQ',
+    label: 'Stand-up set · comedian mode',
+    reels: [
+      {
+        src: 'videos/reel_01_you-cant-sell-chairs-to-dogs.mp4',
+        score: 'AI score 4.5 / 5 · Publish',
+        title: "You Can't Sell Chairs to Dogs",
+        note: 'A clueless boss sets a 50-crore target with no plan; it lands on a mic-drop dog punchline. Comedian mode held the frame on the performer the whole way. From the 6:50 mark.',
+      },
+      {
+        src: 'videos/reel_02_b-schools-teach-just-one-thing.mp4',
+        score: 'AI score 4.5 / 5 · Publish',
+        title: 'B-Schools Teach Just One Thing',
+        note: 'Four years of buildup pays off on one sharp line about the answer being inside the box. Single-performer framing throughout. From the 7:39 mark.',
+      },
+      {
+        src: 'videos/reel_03_18-lakhs-to-become-my-boss.mp4',
+        score: 'AI score 3.7 / 5 · Review',
+        title: '18 Lakhs to Become My Boss',
+        note: 'A self-contained bit on a fresh grad paying a fortune just to outrank a veteran. Flagged for review. From the 1:36 mark.',
+      },
+    ],
+  },
 ]
 
 function Phone({ src, score, title, note, delay = 0 }) {
@@ -282,12 +306,12 @@ function Demo() {
       <div className="container">
         <div ref={hRef} className={`demo-head${hVisible ? ' visible' : ''}`}>
           <p className="eyebrow">See it in action</p>
-          <h2 className="h2">Two episodes in.<br /><em>Six reels out.</em></h2>
+          <h2 className="h2">Three episodes in.<br /><em>Nine reels out.</em></h2>
           <p className="lead">
-            Two distinct podcast episodes fed into PodClipper. Different topics,
-            different speakers, same automated pipeline. Every clip selection,
-            crop decision, caption, and title came from the AI. No human
-            touched the timeline.
+            Three distinct sources fed into PodClipper — two podcasts and a
+            stand-up set. Different topics, different speakers, same automated
+            pipeline. Every clip selection, crop decision, caption, and title
+            came from the AI. No human touched the timeline.
           </p>
         </div>
         {EPISODES.map((ep, idx) => (
@@ -449,7 +473,7 @@ const STEPS = [
     n: '03',
     viz: EditViz,
     title: 'Edit',
-    body: 'Your speaker is detected and tracked in every frame. The crop follows whoever is talking, even through camera cuts between host and guest. Word-by-word captions, a fading title card, and a clean audio fade round out each reel, ready to upload.',
+    body: "Every person is detected and tracked per frame. The crop mirrors the editor's cuts — one panel for close-ups, a stacked split when the shot goes wide — or, in comedian mode, stays locked on a single performer and never cuts to the audience. Word-by-word captions, an optional vibe-matched music bed, a fading title card, and a clean audio fade round out each reel, ready to upload.",
     tag: 'YOLOv8 + MediaPipe + FFmpeg',
   },
 ]
@@ -493,8 +517,8 @@ function StepCard({ step, delay }) {
 const STACK = [
   { label: 'Transcription', title: 'faster-whisper (CTranslate2)', desc: 'One model, multiple threads. A full hour of podcast audio transcribes in the background with no per-worker memory overhead. Every word lands with a precise timestamp.' },
   { label: 'AI Analysis',   title: 'Anthropic Claude',             desc: "Claude reads the full transcript and selects clips with a strong hook, a clear arc, and a satisfying close, then writes a scroll-stopping title for each. After rendering, a second LLM pass scores every reel on hook, arc, payoff, and standalone clarity, with a publish, review, or skip verdict." },
-  { label: 'Speaker Tracking', title: 'YOLOv8 + MediaPipe + pyannote', desc: 'YOLOv8 finds people, MediaPipe attributes each face to the right person (so back-of-head detections never win), and pyannote diarization links each speaker to their on-screen position via mouth-motion variance. The crop follows the active speaker even through hard camera cuts.' },
-  { label: 'Export',        title: 'FFmpeg + OpenCV + PIL',        desc: 'OpenCV computes the 9:16 crop window with EMA smoothing and pipes raw frames to FFmpeg. PIL burns the karaoke word highlights and the fading title overlay. Cached intermediates make re-runs near-instant when you tune crop or subtitle settings.' },
+  { label: 'Speaker Tracking', title: 'YOLOv8 + MediaPipe Pose', desc: "YOLOv8 finds every person and MediaPipe Pose anchors the framing. The renderer mirrors the editor's cuts — a single 9:16 panel for close-ups, a stacked dual-panel when the shot goes wide — with body-IoU locking so it re-frames only on real movement, not landmark jitter. Comedian mode instead locks one performer, using brightness and full-body geometry to reject the audience sitting in shadow." },
+  { label: 'Music & Export', title: 'FFmpeg + OpenCV + PIL', desc: 'OpenCV computes the crop window and pipes raw frames to FFmpeg; PIL burns the karaoke word highlights and the fading title. Optionally, an LLM scores a curated music library section-by-section for the clip’s vibe and sidechain-ducks the best match under the speech. Cached intermediates make re-runs near-instant.' },
 ]
 
 function Stack() {
