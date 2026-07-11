@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "_note": "TEMPLATE — copy to `library.json` (gitignored) and fill with your own tracks. Per-SECTION context + description drive the runtime LLM match against each reel (the selector scores every enabled section 0-10 and picks the highest). Audio files live alongside this manifest and are gitignored (*.mp3). Each section = one hit passage. Section fields: id, start, end (seconds), lyrics (romanized opener), vocals (lines actually sung across THIS window, from mlx-whisper of the cut section — or '(instrumental)'), context (what this passage is about, grounded in its own vocals + provenance), description (vibe + when to use for a reel). method 'lyric' = onset pinned to a verified lyric; 'acoustic' = energy/beat; 'manual' = hand-placed. Set `disabled: true` on a song or section to skip it. Tune the selector's accept bar with cfg.music.min_score (default 5.0).",
+  "songs": [
+    {
+      "id": "example_vocal_song",
+      "title": "Example Vocal Anthem (Artist Name)",
+      "file": "example_vocal_song.mp3",
+      "language": "english",
+      "has_vocals": true,
+      "method": "lyric",
+      "description": "One-line vibe + when-to-use summary for the whole song, e.g. 'Triumphant, driving comeback anthem — best for victory, underdog, or grind-pays-off moments.'",
+      "sections": [
+        {
+          "id": "hook",
+          "start": 42.0,
+          "end": 82.0,
+          "lyrics": "we rise up when they count us out",
+          "vocals": "we rise up when they count us out / nothing's gonna hold us down now / this is our moment, this is our sound",
+          "context": "What THIS 40-second window is actually about, grounded in the lines above — e.g. 'The soaring chorus about refusing to quit; defiant, triumphant, celebratory.'",
+          "description": "Opens on the chorus 'we rise up when they count us out' — use on a victory beat, a comeback reveal, or a triumphant payoff frame."
+        }
+      ]
+    },
+    {
+      "id": "example_instrumental",
+      "title": "Example Cinematic Instrumental (Composer)",
+      "file": "example_instrumental.mp3",
+      "language": "instrumental",
+      "has_vocals": false,
+      "method": "acoustic",
+      "description": "One-line vibe + when-to-use, e.g. 'Reflective, bittersweet piano build — for emotional reveals, nostalgia, or a tender voiceover bed.'",
+      "sections": [
+        {
+          "id": "swell",
+          "start": 95.0,
+          "end": 125.0,
+          "lyrics": "(instrumental)",
+          "vocals": "(instrumental)",
+          "context": "Instrumental only — the rising build toward the emotional peak; no lyrics.",
+          "description": "The climactic swell; layer under a reveal or emotional payoff so the visuals crest as the music opens up.",
+          "disabled": false
+        }
+      ]
+    }
+  ]
+}

@@ -47,6 +47,9 @@ samples/
 *.webm
 *.wav
 *.mp3
+# The music library catalogs real (copyrighted) tracks — keep it local.
+# `music/library.json.example` is the tracked template.
+music/library.json
 # Exception: the three demo reels shipped with the landing page are
 # tracked so the GH-Pages-deployed site has working <video> sources.
 !landing/public/videos/*.mp4

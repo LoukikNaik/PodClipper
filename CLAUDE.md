@@ -208,8 +208,10 @@ existing runs bit-identical.
 `--music` (or `cfg.music.enabled`) lays a ducked music bed under each reel.
 The **library is curated offline** (by Claude Code, not the runtime): songs
 downloaded, their genuine hit-sections found, and each tagged with a vibe
-description — persisted in `music/library.json` (audio gitignored, manifest
-tracked). At runtime the pipeline:
+description — persisted in `music/library.json` (both audio **and** the
+manifest are gitignored, since it catalogs real copyrighted tracks;
+`music/library.json.example` is the tracked schema template — copy it to
+`library.json` and populate). At runtime the pipeline:
 
 1. `load_library` reads the manifest (skips `disabled` songs/sections).
 2. `select_track` — a **separate LLM call** that **scores every enabled
