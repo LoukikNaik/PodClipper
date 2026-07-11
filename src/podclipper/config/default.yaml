@@ -12,7 +12,21 @@ audio:
   chunk_overlap_seconds: 10      # overlap for boundary safety
 
 transcribe:
-  language: null                 # null = auto-detect; set "en", "hi", etc. to force
+  engine: mlx                    # mlx (default, Apple-Silicon GPU, best quality) |
+                                 # faster (faster-whisper CPU/CUDA). CLI: --whisper-engine
+  language: null                 # null = auto-detect per clip (no episode-level pinning)
+  retry_on_garble: true          # if auto-detect returns a suspiciously sparse transcript
+                                 # (accented-English-heard-as-Hindi drops most words),
+                                 # retry with fallback_languages and keep the fullest —
+                                 # so we only force a language when auto actually failed
+  garble_min_words_per_sec: 1.5  # below this word density = likely garbled → retry
+  fallback_languages: ["en"]     # languages to try when auto looks garbled
+  vad_filter: true               # drop non-speech (music/silence) via Silero VAD so
+                                 # Whisper can't hallucinate repetition loops on it
+                                 # ("gess gess gess"); also recovers speech it would
+                                 # otherwise choke on at clip boundaries
+  condition_on_previous_text: false  # don't feed prior text as prompt — stops one bad
+                                 # guess cascading into a hallucinated loop
   first_pass:
     model: base                  # tiny | base | small | medium | large-v3
     compute_type: int8           # int8 (CPU), int8_float16 (MPS), float16 (GPU)

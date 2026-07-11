@@ -143,11 +143,9 @@ def run_pipeline(
         transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
         log.info(f"Cached first-pass transcript → {transcript_cache}")
 
-    # Pin 2nd-pass language to 1st-pass detection so Whisper doesn't flip
-    # mid-episode (Hindi/Urdu/etc. swap produces unreadable subtitles).
-    if cfg.transcribe.language is None and transcript.language:
-        log.info(f"Pinning transcribe language to first-pass detection: {transcript.language}")
-        cfg.transcribe.language = transcript.language
+    # No language pinning: the 2nd pass auto-detects per clip, so a bilingual
+    # episode transcribes each clip in its own language (forcing the episode
+    # majority language garbles the odd-language-out clips).
 
     provider = build_provider(cfg.llm)
     clips = analyze_for_reels(transcript, analyze_duration, provider, cfg, debug_cache_dir=cache)
@@ -368,9 +366,7 @@ def run_trailer_pipeline(
         transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
         log.info(f"Cached transcript → {transcript_cache}")
 
-    if cfg.transcribe.language is None and transcript.language:
-        log.info(f"Pinning transcribe language to first-pass detection: {transcript.language}")
-        cfg.transcribe.language = transcript.language
+    # No language pinning — 2nd pass auto-detects per clip (see run_pipeline).
 
     provider = build_provider(cfg.llm)
     quotables_cache = trailer_cache / "quotables.json"

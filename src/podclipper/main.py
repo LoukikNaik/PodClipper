@@ -68,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force Whisper language (e.g. 'en', 'hi'). Default: auto-detect",
     )
     p.add_argument(
+        "--whisper-engine", choices=["mlx", "faster"], default=None,
+        help="Transcription engine: mlx (default, Apple-Silicon GPU) or faster "
+             "(faster-whisper CPU/CUDA). Overrides cfg.transcribe.engine",
+    )
+    p.add_argument(
         "--llm-provider", choices=["claude_cli", "litellm"], default=None,
         help="Override config.llm.provider",
     )
@@ -120,6 +125,8 @@ def apply_cli_overrides(cfg, args) -> None:
         cfg.paths.output_dir = str(args.output_dir)
     if args.language is not None:
         cfg.transcribe.language = args.language
+    if args.whisper_engine is not None:
+        cfg.transcribe.engine = args.whisper_engine
     if args.llm_provider is not None:
         cfg.llm.provider = args.llm_provider
     if args.max_clips is not None:
