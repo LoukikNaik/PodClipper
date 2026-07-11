@@ -224,16 +224,19 @@ def run_pipeline(
 
                 cropped_path = clip_cache / "cropped.mp4"
                 if crop_mode == "auto":
-                    is_wide = classify_wide_shot_frames(
-                        per_frame_persons,
-                        source_width=clip_w,
-                        source_height=clip_h,
-                        sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
-                        height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
-                        smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
-                        min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
-                        min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
-                    )
+                    if getattr(cfg.crop, "comedy_mode", False):
+                        is_wide = [False] * len(per_frame_persons)
+                    else:
+                        is_wide = classify_wide_shot_frames(
+                            per_frame_persons,
+                            source_width=clip_w,
+                            source_height=clip_h,
+                            sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
+                            height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
+                            smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                            min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
+                            min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
+                        )
                     smart_crop_916_stacked(
                         segment_path, per_frame_persons, is_wide, cropped_path, cfg,
                     )
@@ -476,16 +479,19 @@ def run_trailer_pipeline(
                 per_frame_persons, _hf, _fps, clip_w, clip_h = (
                     detect_humans_all_per_frame(seg_path, cfg)
                 )
-                is_wide = classify_wide_shot_frames(
-                    per_frame_persons,
-                    source_width=clip_w,
-                    source_height=clip_h,
-                    sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
-                    height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
-                    smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
-                    min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
-                    min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
-                )
+                if getattr(cfg.crop, "comedy_mode", False):
+                    is_wide = [False] * len(per_frame_persons)
+                else:
+                    is_wide = classify_wide_shot_frames(
+                        per_frame_persons,
+                        source_width=clip_w,
+                        source_height=clip_h,
+                        sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
+                        height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
+                        smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
+                        min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
+                        min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
+                    )
                 smart_crop_916_stacked(seg_path, per_frame_persons, is_wide, cropped_path, cfg)
             cropped_clips.append(cropped_path)
             progress.advance(task_id)

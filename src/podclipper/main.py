@@ -125,6 +125,12 @@ def build_parser() -> argparse.ArgumentParser:
              "curated library (sets cfg.music.enabled)",
     )
     p.add_argument(
+        "--comedy", action="store_true",
+        help="Single-performer mode for stand-up/comedy: never split into stacked "
+             "panels, and lock the crop on the performer while ignoring audience "
+             "members (sets cfg.crop.comedy_mode)",
+    )
+    p.add_argument(
         "-v", "--verbose", action="store_true",
         help="Enable DEBUG-level logging",
     )
@@ -158,6 +164,8 @@ def apply_cli_overrides(cfg, args) -> None:
         if not hasattr(cfg, "music"):
             cfg.music = SimpleNamespace()
         cfg.music.enabled = True
+    if args.comedy:
+        cfg.crop.comedy_mode = True
     if args.verbose:
         cfg.logging.level = "DEBUG"
 

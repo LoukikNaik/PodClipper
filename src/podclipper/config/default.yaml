@@ -144,6 +144,18 @@ crop:
   shot_min_dwell_frames: 0        # 0 = stack as soon as a two-shot appears (any
                                   # duration); raise to require the two-shot to
                                   # persist N frames before switching layout
+  # Comedy / single-performer mode (CLI: --comedy). Never stacks; locks the crop
+  # on the lit performer and ignores the audience (who sit in shadow).
+  comedy_mode: false
+  comedy_min_person_frac: 0.30    # a person must be TALLER than this fraction of frame
+                                  # height to be a crop candidate — drops small
+                                  # background audience.
+  comedy_brightness_weight: 1.0   # performer scoring: weight on bbox brightness (the
+                                  # performer is spotlit; audience are in shadow — this
+                                  # is the strongest signal). 0 = ignore brightness.
+  comedy_top_weight: 0.5          # weight on how high the bbox top sits (a standing,
+                                  # full-body performer vs short audience silhouettes
+                                  # low in the foreground). Score also adds 0.3*height.
   # Per-panel framing (auto mode): pose-anchored crop with body-bbox IoU
   # hysteresis. Crop bbox stays locked while body IoU >= threshold; only
   # updates when the speaker actually moves enough.

@@ -127,6 +127,36 @@ Tunable knobs (`src/podclipper/config/default.yaml` → `crop:`):
   `shot_height_cap_frac` (1.0 = off) — two-shot detector
 - `intro_zoom.{enabled,duration_seconds,max_zoom}` — the --intro-zoom opener
 
+## The comedy / single-performer path (optional)
+
+`--comedy` (or `cfg.crop.comedy_mode`) is for stand-up / single-performer
+footage where splitting into stacked panels is wrong and audience members
+must never be cropped to. It changes the shot-aware path in two ways:
+
+1. **Never stacks.** The pipeline forces `is_wide` to all-False, so
+   `smart_crop_916_stacked` only ever renders the single 9:16 panel — no
+   dual-panel layout regardless of how many people are on screen.
+2. **Locks on the performer, ignores audience.** `_pick_performer` scores each
+   person (above the `comedy_min_person_frac` 0.30 size floor) per frame and
+   takes the max. The score exploits how stand-up is shot: the performer is
+   **spotlit** while the audience sit in **shadow**, and the performer stands
+   **full-body high** in frame while the audience are **short silhouettes low
+   in the foreground**. So `score = comedy_brightness_weight·(mean bbox
+   luma) + comedy_top_weight·(how high the bbox top sits) + 0.3·(bbox
+   height)`. Brightness is the dominant signal (audience in shadow score near
+   zero). If nobody clears the floor — e.g. an audience reaction cutaway — it
+   **holds the last performer lock** (via the existing miss-tolerance) instead
+   of jumping to an audience face.
+
+Non-comedy runs are bit-identical (the whole thing is gated on `comedy_mode`).
+Knobs (`crop:`): `comedy_mode`, `comedy_min_person_frac`,
+`comedy_brightness_weight`, `comedy_top_weight`.
+
+**Known limit:** a *long* audience cutaway (longer than
+`stacked_miss_tolerance` frames) will eventually fall back to a centered crop
+of whatever's on screen — true fix would need source scene-cut detection.
+The heuristic targets the common single-camera-on-stage case.
+
 ## The pop subtitle path (optional)
 
 Alternative to the classic karaoke renderer for TikTok/Reels-style
@@ -255,6 +285,9 @@ podclipper video.mp4 --subtitle-style pop
 
 # Intro zoom (punch-in → pull-out opener) + background music (LLM-matched bed)
 podclipper video.mp4 --intro-zoom --music
+
+# Comedy / single-performer: never stack, lock on the performer, ignore audience
+podclipper video.mp4 --comedy
 
 # Only consider the first N minutes for clip selection (no re-encode of the rest)
 podclipper video.mp4 --limit-minutes 20

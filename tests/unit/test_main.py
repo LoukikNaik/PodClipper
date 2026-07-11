@@ -258,6 +258,7 @@ def _make_default_args() -> SimpleNamespace:
         subtitle_style=None,
         intro_zoom=False,
         music=False,
+        comedy=False,
         verbose=False,
     )
 
@@ -332,6 +333,17 @@ def test_apply_cli_overrides_sets_crop_debug_overlay_when_debug_crop_flag_true()
     apply_cli_overrides(cfg, args)
 
     assert cfg.crop.debug_overlay is True
+
+
+def test_apply_cli_overrides_sets_comedy_mode_when_comedy_flag_true() -> None:
+    """`--comedy` → `cfg.crop.comedy_mode = True`."""
+    cfg = _make_minimal_cfg()
+    args = _make_default_args()
+    args.comedy = True
+
+    apply_cli_overrides(cfg, args)
+
+    assert cfg.crop.comedy_mode is True
 
 
 def test_apply_cli_overrides_sets_detect_debug_overlay_when_debug_detect_flag_true() -> None:

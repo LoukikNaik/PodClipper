@@ -434,6 +434,33 @@ def _apply_intro_zoom(frame: np.ndarray, frame_idx: int, n_frames: int,
                       interpolation=cv2.INTER_LINEAR)
 
 
+def _pick_performer(
+    frame: np.ndarray, persons: list[BBox], floor: float,
+    src_w: int, src_h: int, bright_w: float, top_w: float,
+) -> Optional[BBox]:
+    """Comedy mode: pick the on-stage performer, not the audience. Among persons
+    above the size floor, score by brightness (the performer is lit; the audience
+    sit in shadow) plus how high and full their body sits in frame (audience are
+    short silhouettes low in the foreground). Returns None if none qualify."""
+    cands = [p for p in persons if p.h >= floor]
+    if not cands:
+        return None
+    best: Optional[BBox] = None
+    best_score = -1.0
+    for p in cands:
+        x0, y0 = max(0, int(p.x)), max(0, int(p.y))
+        x1, y1 = min(src_w, int(p.x + p.w)), min(src_h, int(p.y + p.h))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        bright = float(frame[y0:y1, x0:x1].mean()) / 255.0
+        top_n = 1.0 - (p.y / src_h)          # higher bbox top → standing performer
+        height_n = p.h / src_h               # taller full body → performer
+        score = bright_w * bright + top_w * top_n + 0.3 * height_n
+        if score > best_score:
+            best, best_score = p, score
+    return best
+
+
 def _fallback_single_panel(
     frame: np.ndarray, cx: float, src_w: int, src_h: int,
     panel_w: int, panel_h: int, panel_aspect: float,
@@ -480,6 +507,10 @@ def smart_crop_916_stacked(
     transition_frames = int(getattr(cfg.crop, "stacked_transition_frames", 12))
     # per-frame alpha so a sustained target change settles in ~transition_frames
     transition_alpha = 1.0 / max(1, transition_frames)
+    comedy_mode = bool(getattr(cfg.crop, "comedy_mode", False))
+    comedy_floor_frac = float(getattr(cfg.crop, "comedy_min_person_frac", 0.30))
+    comedy_bright_w = float(getattr(cfg.crop, "comedy_brightness_weight", 1.0))
+    comedy_top_w = float(getattr(cfg.crop, "comedy_top_weight", 0.5))
 
     cap = cv2.VideoCapture(str(source_video))
     if not cap.isOpened():
@@ -489,6 +520,11 @@ def smart_crop_916_stacked(
     src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     height_cap = height_cap_frac * src_h
+    comedy_floor = comedy_floor_frac * src_h
+    if comedy_mode:
+        log.info(f"Comedy mode: single-performer lock via brightness+geometry "
+                 f"(floor={comedy_floor_frac:.0%}, bright_w={comedy_bright_w}, "
+                 f"top_w={comedy_top_w})")
 
     n_wide = int(is_wide.sum()) if hasattr(is_wide, "sum") else sum(1 for v in is_wide if v)
     log.info(
@@ -613,12 +649,20 @@ def smart_crop_916_stacked(
             else:
                 s = state["single"]
                 chosen: Optional[BBox] = None
-                for p in persons:
-                    if p.h < height_cap or len(persons) == 1:
-                        chosen = p
-                        break
-                if chosen is None and persons:
-                    chosen = max(persons, key=lambda p: p.area)
+                if comedy_mode:
+                    # Performer-only: the lit, full-body person on stage — not the
+                    # audience (in shadow, short silhouettes low in the foreground).
+                    # None → hold last lock (miss tolerance) rather than jump to an
+                    # audience member during a cutaway.
+                    chosen = _pick_performer(frame, persons, comedy_floor,
+                                             src_w, src_h, comedy_bright_w, comedy_top_w)
+                else:
+                    for p in persons:
+                        if p.h < height_cap or len(persons) == 1:
+                            chosen = p
+                            break
+                    if chosen is None and persons:
+                        chosen = max(persons, key=lambda p: p.area)
 
                 crop_h = src_h
                 crop_w = max(1, int(round(crop_h * single_aspect)))
