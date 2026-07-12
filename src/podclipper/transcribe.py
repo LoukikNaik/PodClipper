@@ -223,7 +223,7 @@ def transcribe_first_pass(
 ) -> Transcript:
     """Parallel-chunk transcription of the full video audio for LLM analysis."""
     fp = cfg.transcribe.first_pass
-    engine = _resolve_engine(getattr(cfg.transcribe, "engine", "mlx"))
+    engine = _resolve_engine(getattr(cfg.transcribe, "engine", "faster"))
     model = _mlx_repo(fp.model) if engine == "mlx" else _get_model(fp.model, fp.compute_type, fp.device)
     language = cfg.transcribe.language
     log.info(f"First-pass engine: {engine} ({fp.model})")
@@ -290,7 +290,7 @@ def transcribe_second_pass(
     """High-quality single-shot transcription of an extracted clip; returns
     word-level timestamps, clip-relative."""
     sp = cfg.transcribe.second_pass
-    engine = _resolve_engine(getattr(cfg.transcribe, "engine", "mlx"))
+    engine = _resolve_engine(getattr(cfg.transcribe, "engine", "faster"))
     model = _mlx_repo(sp.model) if engine == "mlx" else _get_model(sp.model, sp.compute_type, sp.device)
 
     audio = _decode_audio_to_float32(clip_audio_or_video)

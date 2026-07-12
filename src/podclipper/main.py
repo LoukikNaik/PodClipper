@@ -70,8 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--whisper-engine", choices=["mlx", "faster"], default=None,
-        help="Transcription engine: mlx (default, Apple-Silicon GPU) or faster "
-             "(faster-whisper CPU/CUDA). Overrides cfg.transcribe.engine",
+        help="Transcription engine: faster (default, faster-whisper CPU/CUDA) or "
+             "mlx (Apple-Silicon GPU). Overrides cfg.transcribe.engine",
     )
     p.add_argument(
         "--llm-provider", choices=["claude_cli", "litellm"], default=None,

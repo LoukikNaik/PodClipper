@@ -12,8 +12,9 @@ audio:
   chunk_overlap_seconds: 10      # overlap for boundary safety
 
 transcribe:
-  engine: mlx                    # mlx (default, Apple-Silicon GPU, best quality) |
-                                 # faster (faster-whisper CPU/CUDA). CLI: --whisper-engine
+  engine: faster                 # faster (default, faster-whisper CPU/CUDA — best
+                                 # word recall on fast code-switched Hindi/English) |
+                                 # mlx (Apple-Silicon GPU). CLI: --whisper-engine
   language: null                 # null = auto-detect per clip (no episode-level pinning)
   retry_on_garble: true          # if auto-detect returns a suspiciously sparse transcript
                                  # (accented-English-heard-as-Hindi drops most words),

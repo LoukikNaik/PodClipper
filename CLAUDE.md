@@ -58,14 +58,14 @@ Source video
 | `src/podclipper/pipeline.py` | Orchestrator. Holds the per-clip loop and the `crop.mode` branch. |
 | `src/podclipper/ingest.py` | ffprobe wrapper, returns `VideoMeta`. |
 | `src/podclipper/audio.py` | Whole-video audio extraction. |
-| `src/podclipper/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). Engine behind `cfg.transcribe.engine` = `mlx` (default, Apple-Silicon GPU) \| `faster`. Auto-detects language per clip; VAD + `condition_on_previous_text=false` guard against hallucination; garble-retry re-runs with `fallback_languages` when auto-detect returns a suspiciously sparse transcript. |
+| `src/podclipper/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). Engine behind `cfg.transcribe.engine` = `faster` (default, faster-whisper) \| `mlx` (Apple-Silicon GPU). Auto-detects language per clip; VAD + `condition_on_previous_text=false` guard against hallucination; garble-retry re-runs with `fallback_languages` when auto-detect returns a suspiciously sparse transcript. |
 | `src/podclipper/transcribe_cleanup.py` | LLM post-pass to fix Whisper mis-spellings / transliterate non-Latin. |
 | `src/podclipper/analyze.py` | LLM clip selection — reads transcript, returns `Clip[]`. |
 | `src/podclipper/llm/` | Provider abstraction. `claude_cli.py` (default, configurable timeout), `litellm_provider.py` (unified gateway: Anthropic, OpenAI, Gemini, Groq, Ollama, ...). |
 | `src/podclipper/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |
 | `src/podclipper/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the shot-aware path — two-shot = ≥2 people above a min-size **floor** (`shot_min_person_frac`, ignores tiny background people) separated by ≥`shot_sep_frac`, with an optional min-dwell debounce. |
 | `src/podclipper/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel; body-IoU lock + lerp + **snap-on-cut**, optional intro-zoom, `debug_out` horizontal overlay). |
-| `src/podclipper/music.py` | Optional background music: `load_library` (manifest), `select_track` (LLM vibe-match → random fallback), `mix_music` (ducked bed, loops the section to fill the reel). Behind `--music`. |
+| `src/podclipper/music.py` | Optional background music: `load_library` (manifest), `select_track` (LLM per-section vibe-scoring → argmax, or None if none clears `min_score`), `mix_music` (ducked bed, plays past the section end, loops only at EOF). Behind `--music`. |
 | `src/podclipper/subtitles.py` | Two renderers: `_burn_classic` (karaoke word highlight + fading title + audio fade-out) and `_burn_pop` (1–2 huge sheared words, alternating highlight color). `burn_subtitles` dispatches by `cfg.subtitles.style` (`classic` \| `pop`). |
 | `src/podclipper/evaluate.py` | LLM-as-judge scorer; writes `verdict` + numeric scores into reel sidecar. |
 | `src/podclipper/diarize.py` | **No longer in the hot path.** pyannote.audio + mouth-motion linking; kept for reference / single-locked-camera future use. |
@@ -296,8 +296,8 @@ podclipper video.mp4 --comedy
 # Only consider the first N minutes for clip selection (no re-encode of the rest)
 podclipper video.mp4 --limit-minutes 20
 
-# Transcription engine (mlx is default; faster-whisper on non-Apple / CUDA)
-podclipper video.mp4 --whisper-engine faster
+# Transcription engine (faster-whisper is default; --whisper-engine mlx for Apple-Silicon GPU)
+podclipper video.mp4 --whisper-engine mlx
 
 # Force legacy single-crop path
 # (set cfg.crop.mode to "single" in your override config)
@@ -353,11 +353,15 @@ problem by showing both people whenever the source goes wide.
   MediaPipe FaceLandmarker fails on the small faces in wide shots. The
   shot detector deliberately uses pure bbox geometry — no face-attribution
   requirement — so it still works at low res.
-- **mlx-whisper is the default engine** (Apple-Silicon GPU) and is markedly
-  better than faster-whisper on accented/sung/code-switched audio. Its first
-  pass runs **sequentially** — the numba backend isn't thread-safe and aborts
-  under the ThreadPool. Use `--whisper-engine faster` on non-Apple / CUDA
-  (that path keeps the parallel chunks and the `int8` compute types).
+- **faster-whisper is the default engine.** A/B on fast, code-switched
+  Hindi/English stand-up (Munawar Faruqui) showed faster-whisper large-v3
+  catching more words and spelling them more accurately than mlx (e.g. `रुक जा`
+  vs `रुप जा`, `पुलिस` vs `पुलीस`); on the Urdu-script bits the two were
+  identical. It also keeps the parallel first-pass chunks + `int8` compute.
+  **mlx-whisper** (Apple-Silicon GPU) is available via `--whisper-engine mlx` —
+  its first pass runs **sequentially** (the numba backend isn't thread-safe and
+  aborts under the ThreadPool). `_resolve_engine` still auto-falls-back to
+  faster if mlx is requested but not importable.
 - **Language: auto-detect per clip, don't force globally.** Forcing `--language
   en` makes Whisper *translate* Hindi to English; forcing `hi` garbles English.
   Auto-detect keeps each clip in its own language; the **garble-retry** safety

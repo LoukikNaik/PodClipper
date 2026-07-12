@@ -42,12 +42,12 @@ For full-screen playback with audio inline, visit the [live demo site](https://p
 Video
   ↓ ingest        ffprobe — validate, metadata
   ↓ audio         ffmpeg — extract mono 16kHz WAV
-  ↓ transcribe    mlx-whisper (default) — per-clip language auto-detect
+  ↓ transcribe    faster-whisper (default) — per-clip language auto-detect
   ↓ analyze       LLM — pick reel-worthy clips as JSON
   ↓ per clip:
        ├─ extract       ffmpeg cut ±2s pad
        ├─ detect        YOLOv8 + MediaPipe — all persons + face flags
-       ├─ transcribe 2  mlx-whisper large-v3 — clean word timestamps
+       ├─ transcribe 2  faster-whisper large-v3 — clean word timestamps
        │                (VAD + garble-retry; cached to words.json)
        ├─ shot-classify per-frame single vs two-shot (≥2 real people)
        ├─ crop          shot-aware 9:16:
@@ -119,20 +119,23 @@ The pipeline runs without it — it just won't follow speaker turns visually in 
 
 ### Transcription engine
 
-The default is **mlx-whisper** (Apple-Silicon GPU — best quality and speed).
-It's installed automatically only on Apple Silicon (platform-marked dependency).
+The default is **faster-whisper** (CPU/CUDA). On fast, code-switched
+Hindi/English audio it caught more words — and spelled them more accurately —
+than mlx in A/B testing, and it keeps the parallel first-pass chunks. Its
+default compute type is `int8` on CPU (works out of the box); for CUDA set
+`float16` / `int8_float16` in config.
 
-**Not on an Apple-Silicon Mac?** No action needed — if mlx-whisper isn't
-installed/importable, PodClipper automatically falls back to **faster-whisper**
-(CPU/CUDA). To force it explicitly (or silence the fallback warning):
+**On an Apple-Silicon Mac** you can opt into GPU transcription with
+**mlx-whisper** (installed automatically only on Apple Silicon via a
+platform-marked dependency):
 
 ```bash
-podclipper video.mp4 --whisper-engine faster
-# or set  transcribe.engine: faster  in an override config
+podclipper video.mp4 --whisper-engine mlx
+# or set  transcribe.engine: mlx  in an override config
 ```
 
-faster-whisper's default compute type is `int8` on CPU (works out of the box);
-for CUDA set `float16` / `int8_float16` in config.
+If mlx is requested but isn't installed/importable, PodClipper automatically
+falls back to faster-whisper.
 
 ## Usage
 
