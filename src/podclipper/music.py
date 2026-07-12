@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import re
 import subprocess
 import tempfile
@@ -85,9 +84,9 @@ def _parse_scores(raw: str) -> list[float]:
 
 def select_track(title: str, transcript: str, lib: dict,
                  provider, cfg: SimpleNamespace) -> Optional[dict]:
-    """Score every library SECTION for the reel in one LLM call, pick the
-    highest; fall back to a random section if none clears `music.min_score`.
-    Returns {file, start, end, song_id, section_id} or None."""
+    """Score every library SECTION for the reel in one LLM call and pick the
+    highest. Returns {file, start, end, song_id, section_id}, or None when no
+    section clears `music.min_score` (no vibe match → no music, never random)."""
     cands = _candidates(lib["songs"])
     if not cands:
         return None
@@ -102,23 +101,21 @@ def select_track(title: str, transcript: str, lib: dict,
         )
         scores = _parse_scores(raw)
     except Exception as e:  # noqa: BLE001
-        log.warning(f"music selection LLM call failed ({e}); picking at random")
+        log.warning(f"music selection LLM call failed ({e}); leaving reel unscored")
 
-    if len(scores) == len(cands):
-        best = max(range(len(cands)), key=lambda i: scores[i])
-        if scores[best] >= min_score:
-            song, section = cands[best]
-            log.info(f"music: matched '{song['title']}' / {section.get('id', '')} "
-                     f"(score {scores[best]:.0f}/10) to reel '{title[:40]}'")
-        else:
-            song, section = random.choice(cands)
-            log.info(f"music: top score {scores[best]:.0f} < {min_score:.0f} — "
-                     f"random pick '{song['title']}' / {section.get('id', '')}")
-    else:
-        song, section = random.choice(cands)
-        log.info(f"music: no usable scores — random pick '{song['title']}' / "
-                 f"{section.get('id', '')}")
+    if len(scores) != len(cands):
+        log.info(f"music: no usable scores for reel '{title[:40]}' — skipping music")
+        return None
 
+    best = max(range(len(cands)), key=lambda i: scores[i])
+    if scores[best] < min_score:
+        log.info(f"music: best vibe match only {scores[best]:.0f}/10 < "
+                 f"{min_score:.0f} for reel '{title[:40]}' — skipping music")
+        return None
+
+    song, section = cands[best]
+    log.info(f"music: matched '{song['title']}' / {section.get('id', '')} "
+             f"(score {scores[best]:.0f}/10) to reel '{title[:40]}'")
     return {
         "file": _resolve(lib, song),
         "start": float(section.get("start", 0.0)),

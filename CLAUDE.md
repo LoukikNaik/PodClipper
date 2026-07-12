@@ -216,10 +216,12 @@ manifest are gitignored, since it catalogs real copyrighted tracks;
 1. `load_library` reads the manifest (skips `disabled` songs/sections).
 2. `select_track` — a **separate LLM call** that **scores every enabled
    *section* 0–10** for the reel (transcript+title) in one shot and picks the
-   **argmax** (`music.min_score`, default 5.0; below it → random section).
-   Scoring is per-section (`_candidates` flattens song→sections), so the
-   selector judges the actual passage — its own vocals + context — not the
-   whole song. Below `min_score` or on parse failure → random section.
+   **argmax**. Scoring is per-section (`_candidates` flattens song→sections),
+   so the selector judges the actual passage — its own vocals + context — not
+   the whole song. If the best section is below `music.min_score` (default 5.0)
+   — or the scores are unusable/unparseable — it returns **None and the reel
+   gets no music** (a poor vibe is worse than silence; never a random/forced
+   pick).
 3. `mix_music` — trims the chosen section and **loops it** to fill the reel
    (never bleeds past the section into unwanted parts), then sidechain-ducks
    it under the speech (`gain`, `duck_ratio`, `duck_release`, `fade_seconds`).

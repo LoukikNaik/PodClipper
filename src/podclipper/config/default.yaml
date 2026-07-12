@@ -245,12 +245,12 @@ trailer:
 
 music:                           # opt-in background music from a curated library.
                                  # A separate LLM call scores every track for the
-                                 # reel's vibe and picks the highest (falls back to
-                                 # random below min_score). CLI: --music
+                                 # reel's vibe and picks the highest; if none clears
+                                 # min_score the reel gets NO music. CLI: --music
   enabled: false
   library_path: music/library.json
-  min_score: 5.0                 # best track must score >= this (0..10) to be used,
-                                 # else fall back to a random pick
+  min_score: 5.0                 # best section must score >= this (0..10) to be used;
+                                 # below it → no music (never a random/forced pick)
   gain: 0.32                     # music bed level (0..1); kept well under speech
   duck_ratio: 3.0                # sidechain compression ratio (higher = music dips
                                  # more when the speaker talks)
