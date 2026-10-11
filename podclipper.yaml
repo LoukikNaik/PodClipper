@@ -1,0 +1,17 @@
+llm:
+  endpoint: https://openrouter.ai/api/v1
+  model: z-ai/glm-5.3-flash
+  api_key_env: OPENROUTER_API_KEY
+  max_tokens: 16384
+  routing:
+    order: [deepinfra]
+    allow_fallbacks: true
+    require_parameters: true
+
+content:
+  type: podcast
+  clips: 8
+
+output:
+  captions: classic
+  music: false
