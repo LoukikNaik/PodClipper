@@ -54,14 +54,14 @@ Source video
 
 | File | Role |
 |---|---|
-| `src/podclipper/main.py` | CLI entry point (`podclipper = "podclipper.main:main"` in pyproject.toml). Loads `.env`, parses flags, calls `run_pipeline`. |
+| `src/podclipper/main.py` | CLI entry point (`podclipper = "podclipper.main:main"` in pyproject.toml). `init` creates starter files; auto-loads local config and `.env`, checks tools/key presence before transcription, then calls the pipeline. `--help-all` exposes advanced flags. |
 | `src/podclipper/pipeline.py` | Orchestrator. Holds the per-clip loop and the `crop.mode` branch. |
 | `src/podclipper/ingest.py` | ffprobe wrapper, returns `VideoMeta`. |
 | `src/podclipper/audio.py` | Whole-video audio extraction. |
 | `src/podclipper/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). Engine behind `cfg.transcribe.engine` = `faster` (default, faster-whisper) \| `mlx` (Apple-Silicon GPU). Auto-detects language per clip; VAD + `condition_on_previous_text=false` guard against hallucination; garble-retry re-runs with `fallback_languages` when auto-detect returns a suspiciously sparse transcript. |
 | `src/podclipper/transcribe_cleanup.py` | LLM post-pass to fix Whisper mis-spellings / transliterate non-Latin. |
 | `src/podclipper/analyze.py` | LLM clip selection — reads transcript, returns `Clip[]`. |
-| `src/podclipper/llm/` | Provider abstraction. `claude_cli.py` (default, configurable timeout), `litellm_provider.py` (unified gateway: Anthropic, OpenAI, Gemini, Groq, Ollama, ...). |
+| `src/podclipper/llm/` | Provider abstraction. `litellm_provider.py` (shared OpenAI-compatible endpoint client). |
 | `src/podclipper/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |
 | `src/podclipper/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the shot-aware path — two-shot = ≥2 people above a min-size **floor** (`shot_min_person_frac`, ignores tiny background people) separated by ≥`shot_sep_frac`, with an optional min-dwell debounce. |
 | `src/podclipper/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel; body-IoU lock + lerp + **snap-on-cut**, optional intro-zoom, `debug_out` horizontal overlay). |
@@ -72,7 +72,7 @@ Source video
 | `src/podclipper/types.py` | Shared dataclasses: `BBox`, `Word`, `Clip`, `Timeline`, etc. |
 | `src/podclipper/config.py` | YAML loader → `SimpleNamespace` tree. |
 | `src/podclipper/config/default.yaml` | All knobs (bundled inside the wheel via `importlib.resources`). Key: `crop.mode` = `auto` (shot-aware) or `single` (legacy). |
-| `src/podclipper/config/__init__.py` | `load_config(path)` for explicit `-c` flag; `load_default_config()` for the packaged file (used when no `-c` given). |
+| `src/podclipper/config/__init__.py` | `load_config(path)` merges overrides into packaged defaults. CLI loads explicit `-c`, otherwise local `podclipper.yaml`, otherwise `load_default_config()`. |
 | `src/podclipper/prompts/` | 5 system prompts (`reel_detector`, `reel_refiner`, `trailer_picks/refiner/evaluator`) loaded via `load_prompt(name)` — also bundled in the wheel. |
 
 ## The shot-aware crop path (current default)
@@ -129,7 +129,7 @@ Tunable knobs (`src/podclipper/config/default.yaml` → `crop:`):
 
 ## The comedy / single-performer path (optional)
 
-`--comedy` (or `cfg.crop.comedy_mode`) is for stand-up / single-performer
+`--type comedy` (or `cfg.crop.comedy_mode`) is for stand-up / single-performer
 footage where splitting into stacked panels is wrong and audience members
 must never be cropped to. It changes the shot-aware path in two ways:
 
@@ -162,7 +162,7 @@ The heuristic targets the common single-camera-on-stage case.
 Alternative to the classic karaoke renderer for TikTok/Reels-style
 captions — 1–2 huge italic-sheared words at a time, active word in a
 cycling highlight color (red → green by default) with a slight scale-up,
-heavy black outline. Enabled per-run with `--subtitle-style pop` or
+heavy black outline. Enabled per-run with `--captions pop` or
 per-config with `cfg.subtitles.style: "pop"`. Default is `classic`.
 
 **Per popup:**
@@ -274,24 +274,34 @@ each with a `.txt` sidecar containing:
 Install first: `pip install -e .` (or `pip install podclipper` after PyPI release).
 
 ```bash
-# Full pipeline, packaged default config (shot-aware crop mode)
+# One-time setup (keeps existing files); then add the API key to .env
+podclipper init
+
+# Full podcast pipeline, auto-loads local podclipper.yaml (shot-aware crop mode)
 podclipper path/to/video.mp4
 # equivalent: python -m podclipper path/to/video.mp4
 
 # Common flags
-podclipper video.mp4 --llm-provider litellm --output-dir outputs --max-clips 5 -v
+podclipper video.mp4 --output-dir outputs --clips 5 -v
 
-# Override config (pass a FULL yaml — no partial merging)
+# Override config (partial overrides merge recursively with packaged defaults)
 podclipper video.mp4 -c my-overrides.yaml
 
+# Review the picks first, then export the saved selection
+podclipper video.mp4 --clips 3 --select-only
+podclipper video.mp4 --selection outputs/<timestamp>/selection.json
+
+# Advanced options (other modes, transcription tuning, debugging)
+podclipper --help-all
+
 # Pop subtitle style (TikTok-style 1-2 huge sheared words at a time)
-podclipper video.mp4 --subtitle-style pop
+podclipper video.mp4 --captions pop
 
 # Intro zoom (punch-in → pull-out opener) + background music (LLM-matched bed)
 podclipper video.mp4 --intro-zoom --music
 
 # Comedy / single-performer: never stack, lock on the performer, ignore audience
-podclipper video.mp4 --comedy
+podclipper video.mp4 --type comedy
 
 # Only consider the first N minutes for clip selection (no re-encode of the rest)
 podclipper video.mp4 --limit-minutes 20
@@ -319,14 +329,11 @@ python experiments/highlight_faces.py in.mp4 out.mp4        # MediaPipe face-bbo
 
 ## LLM provider
 
-Configured at `cfg.llm.provider`:
-- `claude_cli` (default) — shells out to `claude -p`. Needs Claude Code
-  CLI on PATH. Timeout is `cfg.llm.claude_cli.timeout_seconds` (default 900).
-- `litellm` — unified SDK. Vendor is picked from `cfg.llm.model`
-  (`anthropic/claude-sonnet-4-5`, `openai/gpt-5-mini`, `ollama/llama3`,
-  `groq/llama-3-70b`, ...). API key env var follows LiteLLM's convention
-  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...). For local/self-hosted
-  models, set `cfg.llm.litellm.api_base`.
+All LLM stages share `cfg.llm.endpoint`, `cfg.llm.model`, and
+`cfg.llm.api_key_env`. The endpoint must accept OpenAI-compatible chat requests.
+LiteLLM is the client implementation; Claude CLI has been removed.
+Timeout and retries are overridable via `cfg.llm.timeout_seconds` and
+`cfg.llm.num_retries`.
 
 ## Optional: speaker diarization (legacy single-mode only)
 
@@ -387,7 +394,7 @@ problem by showing both people whenever the source goes wide.
 | Crop misses head | `src/podclipper/crop.py` (`_bbox_from_pose_anchors`) — tweak the 1.5/3.5 head-height multipliers |
 | Subtitles look off | `src/podclipper/subtitles.py` — check `cfg.subtitles.style` first to know which renderer is in play (`_burn_classic` vs `_burn_pop`); knobs under `config.subtitles.*` and `config.subtitles.pop.*` |
 | Reel marked skip | `src/podclipper/evaluate.py`, sidecar `.txt` has the LLM's full feedback |
-| Pipeline times out at LLM | `cfg.llm.claude_cli.timeout_seconds` |
+| Pipeline times out at LLM | `cfg.llm.timeout_seconds` |
 | HF / pyannote errors | only relevant in `crop.mode = single` + diarize.enabled |
 
 ## Recent architectural shift (May 2026)
