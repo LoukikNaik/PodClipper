@@ -39,6 +39,18 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+After the first PyPI release is published, you can install without cloning:
+
+```bash
+# macOS: install the system tools and a supported Python
+brew install ffmpeg pipx python@3.12
+pipx ensurepath
+pipx install --python python3.12 podclipper
+```
+
+Reopen your terminal if `pipx ensurepath` asks you to. Pipx manages PodClipper's
+virtual environment for you. Upgrade later with `pipx upgrade podclipper`.
+
 ### 2. Set your API key once
 
 ```bash
@@ -303,4 +315,16 @@ The Python package is in `src/podclipper/`; local development scripts are in
 
 ## License
 
-MIT (as declared in `pyproject.toml`).
+PodClipper is licensed under **AGPL-3.0-only**. See [LICENSE](LICENSE) for the
+full terms and [NOTICE](NOTICE) for copyright and third-party attribution.
+
+Person detection uses [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
+under its AGPL license. Other dependencies and downloaded models retain their
+own licenses. The project source is available in this repository.
+
+## Publishing releases
+
+See [the release guide](docs/RELEASING.md) for one-time PyPI setup and the exact
+commands. A new `vX.Y.Z` tag publishes version `X.Y.Z` automatically; there is
+no version number to edit in the code. Existing published versions and tags
+must not be reused for new fixes.

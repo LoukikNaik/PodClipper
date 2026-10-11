@@ -1,0 +1,14 @@
+PodClipper
+Copyright (c) 2026 Loukik Naik
+
+PodClipper is licensed under the GNU Affero General Public License,
+version 3 only (AGPL-3.0-only). See LICENSE for the full terms.
+Source code: https://github.com/LoukikNaik/PodClipper
+
+PodClipper uses Ultralytics YOLO for person detection. Credit to Ultralytics
+and its contributors: https://github.com/ultralytics/ultralytics
+Ultralytics code and model weights are offered under AGPL-3.0 or a separate
+Enterprise license. PodClipper uses the AGPL-3.0 option.
+
+Other dependencies and downloaded model assets retain their respective
+copyright notices and licenses. This notice does not relicense them.

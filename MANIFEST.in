@@ -1,0 +1,17 @@
+include README.md LICENSE NOTICE pyproject.toml
+recursive-include src/podclipper *.py *.yaml *.txt
+prune .cursor
+prune .github
+prune corpus
+prune dev
+prune docs
+prune experiments
+prune landing
+prune music
+prune tests
+prune transcripts
+prune samples
+prune outputs
+prune .cache
+exclude .env.example .gitignore CLAUDE.md backlog.md podclipper.yaml pytest.ini requirements*.txt
+global-exclude .env .env.* *.py[cod] *.mp4 *.mov *.wav *.mp3 *.pt *.pth *.onnx *.task *.tflite

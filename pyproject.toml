@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "podclipper"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local-first pipeline that turns long-form podcast videos into short vertical reels."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
-license = { text = "MIT" }
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Loukik Naik", email = "loukiknaik@gmail.com" },
 ]
@@ -16,7 +17,6 @@ keywords = ["video", "podcast", "reels", "shorts", "whisper", "llm", "ffmpeg"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -71,3 +71,7 @@ include = ["podclipper*"]
 
 [tool.setuptools.package-data]
 podclipper = ["config/*.yaml", "prompts/*.txt"]
+
+[tool.setuptools_scm]
+version_file = "src/podclipper/_version.py"
+git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"

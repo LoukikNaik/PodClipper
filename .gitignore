@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.egg
 *.egg-info/
+src/podclipper/_version.py
 .eggs/
 build/
 dist/
