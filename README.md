@@ -49,11 +49,12 @@ This creates a small `podclipper.yaml` and a `.env` file. Existing files are kep
 The starter config uses the OpenAI endpoint; put your key in `.env`:
 
 ```dotenv
-OPENAI_API_KEY=your-api-key
+LLM_API_KEY=your-api-key
 ```
 
-Already using another OpenAI-compatible endpoint? Set its endpoint, model, and
-key variable in `podclipper.yaml`. See [LLM configuration](#llm-configuration).
+The same `LLM_API_KEY` name works for every supported host. Already using another
+OpenAI-compatible endpoint? Set its endpoint and model in `.env` or
+`podclipper.yaml`. See [LLM configuration](#llm-configuration).
 
 ### 3. Make reels
 
@@ -123,7 +124,6 @@ The starter config contains only the settings most people need:
 llm:
   endpoint: https://api.openai.com/v1
   model: gpt-5-mini
-  api_key_env: OPENAI_API_KEY
 content:
   clips: 8
 output:
@@ -143,7 +143,7 @@ crop:
 ```
 
 Config loading order is packaged defaults → explicit `-c` file **or** local
-`podclipper.yaml` → CLI flags. Nested mappings merge; lists and scalar values
+`podclipper.yaml` → environment overrides → CLI flags. Nested mappings merge; lists and scalar values
 replace defaults. Explicit internal settings take precedence over their public
 shortcuts. Unknown settings and invalid value types produce an error.
 
@@ -155,6 +155,8 @@ podclipper config --resolved
 podclipper podcast.mp4 -c another-config.yaml
 ```
 
+`LLM_ENDPOINT` and `LLM_MODEL` in your environment override YAML settings.
+Blank endpoint/model variables leave the YAML values in place.
 Shell environment variables take precedence over `.env`; the working-directory
 `.env` takes precedence over a config file's sibling `.env`. Keep API keys in
 `.env` or your shell, rather than the YAML file.
@@ -164,17 +166,26 @@ Shell environment variables take precedence over `.env`; the working-directory
 Every LLM stage uses the same OpenAI-compatible endpoint through LiteLLM.
 There is no Claude CLI dependency or reasoning-effort override.
 
-For OpenRouter, replace the `llm` section with your chosen model, for example
-the model used in our local setup:
+Use one host, one model, and one key. For example, our OpenRouter setup can be
+configured entirely in `.env`:
+
+```dotenv
+LLM_ENDPOINT=https://openrouter.ai/api/v1
+LLM_MODEL=z-ai/glm-5.3-flash
+LLM_API_KEY=your-api-key
+```
+
+Or keep the endpoint and model in YAML and only `LLM_API_KEY` in `.env`:
 
 ```yaml
 llm:
   endpoint: https://openrouter.ai/api/v1
   model: z-ai/glm-5.3-flash
-  api_key_env: OPENROUTER_API_KEY
 ```
 
-Put `OPENROUTER_API_KEY=your-api-key` in `.env`. Optional provider routing:
+There are no provider-specific key variables or `api_key_env` setting. Existing
+setups should rename their API key variable to `LLM_API_KEY` and remove
+`llm.api_key_env` from YAML. Optional provider routing:
 
 ```yaml
 llm:
@@ -186,12 +197,13 @@ llm:
 This prefers DeepInfra while allowing other hosts. `only: [deepinfra]` restricts
 requests to that host. Model and provider availability depend on your endpoint.
 
-LLM calls start with `llm.max_tokens: 16384`. A truncated response is retried
-**once**, with up to twice that budget, capped by `llm.retry_max_tokens: 32768`.
-Incomplete responses are never accepted. A retry can increase API cost, and
-your endpoint must support the larger budget. To disable the larger retry, set
-`retry_max_tokens` equal to `max_tokens`. These settings are optional overrides;
-they don't need to appear in the minimal config.
+LLM calls default to `llm.max_tokens: 32768` (32k). Incomplete responses are
+never accepted. The retry ceiling also defaults to 32k, so a truncated response
+at that limit fails. To allow **one** larger retry, raise `llm.retry_max_tokens`
+above `max_tokens`; the retry uses up to twice the requested budget, capped by
+that ceiling. A retry can increase API cost, and your endpoint must support the
+larger budget. These settings are optional overrides; they don't need to appear
+in the minimal config.
 
 ## What happens under the hood
 

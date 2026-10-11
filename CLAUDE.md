@@ -329,8 +329,10 @@ python experiments/highlight_faces.py in.mp4 out.mp4        # MediaPipe face-bbo
 
 ## LLM provider
 
-All LLM stages share `cfg.llm.endpoint`, `cfg.llm.model`, and
-`cfg.llm.api_key_env`. The endpoint must accept OpenAI-compatible chat requests.
+All LLM stages share `cfg.llm.endpoint`, `cfg.llm.model`, and the single
+`LLM_API_KEY` environment variable. `LLM_ENDPOINT` and `LLM_MODEL` optionally
+override YAML; shell environment wins over `.env`. There is no `api_key_env`
+config setting. The endpoint must accept OpenAI-compatible chat requests.
 LiteLLM is the client implementation; Claude CLI has been removed.
 Timeout and retries are overridable via `cfg.llm.timeout_seconds` and
 `cfg.llm.num_retries`.

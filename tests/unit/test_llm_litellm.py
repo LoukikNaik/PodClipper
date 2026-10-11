@@ -217,30 +217,26 @@ def test_complete_forwards_num_retries_from_cfg(mocker) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Cycle 1.16 — api_key resolved from cfg.api_key_env and forwarded
+# Cycle 1.16 — one generic API key for every configured endpoint
 # --------------------------------------------------------------------------- #
 
-def test_complete_forwards_api_key_from_configured_env_var(
+def test_complete_forwards_single_generic_api_key(
     mocker, monkeypatch,
 ) -> None:
-    """cfg.api_key_env names the env var to read; its value → api_key= kwarg.
-
-    Lets users point at OpenAI-compatible gateways (TokenRouter, OpenRouter,
-    Helicone, ...) without overloading OPENAI_API_KEY with a non-OpenAI key.
-    """
+    """Every endpoint reads LLM_API_KEY without a key-variable config setting."""
     from podclipper.llm.litellm_provider import LiteLLMProvider
 
-    monkeypatch.setenv("TOKENROUTER_API_KEY", "tr-sekret")
+    monkeypatch.setenv("LLM_API_KEY", "generic-test-key")
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
     provider = LiteLLMProvider(
-        SimpleNamespace(api_key_env="TOKENROUTER_API_KEY"),
+        SimpleNamespace(),
         model="openai/anthropic/claude-sonnet-4.5",
     )
 
     provider.complete("hi")
 
-    assert mock_completion.call_args.kwargs["api_key"] == "tr-sekret"
+    assert mock_completion.call_args.kwargs["api_key"] == "generic-test-key"
 
 
 # --------------------------------------------------------------------------- #
@@ -271,20 +267,21 @@ def test_plain_endpoint_model_routes_through_openai_protocol(mocker, monkeypatch
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     completion = mocker.patch("litellm.completion")
     completion.return_value = _make_litellm_response(mocker, "ok")
-    provider = LiteLLMProvider(SimpleNamespace(endpoint="https://example.test/v1",
-                                              api_key_env="LLM_API_KEY"), model="example")
+    provider = LiteLLMProvider(SimpleNamespace(endpoint="https://example.test/v1"), model="example")
     assert provider.complete("hi") == "ok"
     assert completion.call_args.kwargs["model"] == "openai/example"
     assert completion.call_args.kwargs["api_base"] == "https://example.test/v1"
     assert completion.call_args.kwargs["api_key"] == "test-key"
 
 
-def test_provider_routing_forwarded_without_reasoning_override(mocker):
+def test_provider_routing_forwarded_without_reasoning_override(mocker, tmp_path):
     from podclipper.config import load_config
     from podclipper.llm import build_provider
     completion = mocker.patch("litellm.completion")
     completion.return_value = _make_litellm_response(mocker, "Hi")
-    provider = build_provider(load_config("podclipper.yaml").llm)
+    config = tmp_path / "config.yaml"
+    config.write_text("llm:\n  routing:\n    only: [deepinfra]\n    allow_fallbacks: false\n")
+    provider = build_provider(load_config(config).llm)
     assert provider.complete("Hi") == "Hi"
     params = completion.call_args.kwargs
     assert params["extra_body"] == {"provider": {

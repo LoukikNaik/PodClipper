@@ -28,5 +28,12 @@ def test_console_entry_point_podclipper_prints_help_and_exits_zero() -> None:
 
     assert result.returncode == 0
     assert "podclipper" in result.stdout.lower()
-    assert "--type" in result.stdout
+    assert "--clips" in result.stdout
+    assert "--type" not in result.stdout
     assert "--llm-provider" not in result.stdout
+
+    advanced = subprocess.run(
+        ["podclipper", "--help-all"], capture_output=True, text=True, timeout=15,
+    )
+    assert advanced.returncode == 0
+    assert "--type" in advanced.stdout

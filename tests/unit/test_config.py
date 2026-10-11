@@ -45,6 +45,10 @@ def test_empty_config_inherits_defaults(tmp_path):
     assert ns_to_dict(load_config(path)) == ns_to_dict(load_default_config())
 
 
+def test_default_llm_budget_is_32k():
+    assert load_default_config().llm.max_tokens == 32768
+
+
 def test_resolved_public_settings_match_internal_overrides(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("content:\n  clips: 3\nanalyze:\n  target_clips: 5\n")

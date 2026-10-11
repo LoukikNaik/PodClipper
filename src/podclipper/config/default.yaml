@@ -49,9 +49,8 @@ transcribe:
 llm:
   endpoint: https://api.openai.com/v1
   model: gpt-5-mini
-  api_key_env: OPENAI_API_KEY
-  max_tokens: 16384
-  retry_max_tokens: 32768        # one larger retry for a truncated response; set equal to max_tokens to disable
+  max_tokens: 32768
+  retry_max_tokens: 32768        # raise above max_tokens to allow one larger retry after truncation
   timeout_seconds: 900
   num_retries: 2
   routing:

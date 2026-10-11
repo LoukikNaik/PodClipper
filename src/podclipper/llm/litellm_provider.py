@@ -22,8 +22,7 @@ class LiteLLMProvider:
         self.timeout = getattr(cfg, "timeout_seconds", None)
         self.num_retries = getattr(cfg, "num_retries", None)
         self.retry_max_tokens = getattr(cfg, "retry_max_tokens", 32768)
-        api_key_env = getattr(cfg, "api_key_env", None)
-        self.api_key = os.environ.get(api_key_env) if api_key_env else None
+        self.api_key = os.environ.get("LLM_API_KEY")
         from ..config import ns_to_dict
         self.routing = ns_to_dict(getattr(cfg, "routing", {}))
 

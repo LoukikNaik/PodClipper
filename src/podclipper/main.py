@@ -119,6 +119,19 @@ def _config_path(explicit: Path | None) -> Path | None:
     return local if local.exists() else None
 
 
+def _load_runtime_config(config_path: Path | None):
+    """Apply shell/.env connection settings over the selected YAML config."""
+    _load_dotenv()
+    if config_path is not None:
+        _load_dotenv(config_path.resolve().parent / ".env")
+    cfg = load_config(config_path) if config_path else load_default_config()
+    for name, field in (("LLM_ENDPOINT", "endpoint"), ("LLM_MODEL", "model")):
+        value = os.environ.get(name, "").strip()
+        if value:
+            setattr(cfg.llm, field, value)
+    return cfg
+
+
 def _init_project() -> int:
     """Create a small starter config and key file without replacing user files."""
     import yaml
@@ -131,27 +144,28 @@ def _init_project() -> int:
         else:
             cfg = load_default_config()
             starter = {
-                "llm": {key: getattr(cfg.llm, key) for key in ("endpoint", "model", "api_key_env")},
+                "llm": {key: getattr(cfg.llm, key) for key in ("endpoint", "model")},
                 "content": {"clips": cfg.content.clips},
                 "output": {"captions": cfg.output.captions},
             }
             with config_path.open("x") as handle:
                 handle.write(yaml.safe_dump(starter, sort_keys=False))
             print("Created podclipper.yaml")
-        key = cfg.llm.api_key_env
+        key = "LLM_API_KEY"
         env_path = Path(".env")
         if env_path.exists():
             print("Keeping existing .env")
-        elif key:
+        else:
             # Restrict access before writing, including on machines with a permissive umask.
             fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as handle:
-                handle.write(f"# API key for the endpoint in podclipper.yaml. Keep this file private.\n{key}=\n")
+                handle.write(
+                    f"# One API key for your chosen LLM host. Keep this file private.\n{key}=\n"
+                    "\n# Optional: override the endpoint and model from podclipper.yaml.\n"
+                    "# LLM_ENDPOINT=https://your-host/v1\n# LLM_MODEL=your-model\n"
+                )
             print("Created .env")
-        if key:
-            print(f"\nSet {key} in .env (or your shell), then run:")
-        else:
-            print("\nRun:")
+        print(f"\nSet {key} in .env (or your shell), then run:")
         print('  podclipper "path/to/podcast.mp4"')
         return 0
     except (OSError, ValueError, yaml.YAMLError) as exc:
@@ -169,11 +183,11 @@ def _check_setup(cfg) -> None:
         )
     endpoint = urlparse(cfg.llm.endpoint)
     if endpoint.scheme not in ("http", "https") or not endpoint.netloc:
-        raise ValueError("llm.endpoint must be an http:// or https:// URL in podclipper.yaml")
+        raise ValueError("Set an http:// or https:// LLM_ENDPOINT in .env, or llm.endpoint in podclipper.yaml")
     if not cfg.llm.model.strip():
-        raise ValueError("Set llm.model in podclipper.yaml")
-    key = cfg.llm.api_key_env
-    if key and not os.environ.get(key, "").strip():
+        raise ValueError("Set LLM_MODEL in .env, or llm.model in podclipper.yaml")
+    key = "LLM_API_KEY"
+    if not os.environ.get(key, "").strip():
         raise ValueError(f"Missing {key}. Add {key}=your-api-key to .env or export it in your shell.")
 
 
@@ -222,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(raw[1:])
         try:
             config_path = _config_path(args.config)
-            cfg = load_config(config_path) if config_path else load_default_config()
+            cfg = _load_runtime_config(config_path)
         except (OSError, ValueError, yaml.YAMLError) as exc:
             print(f"error: could not load config: {exc}", file=sys.stderr)
             return 2
@@ -252,15 +266,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: config file not found: {config_path}", file=sys.stderr)
         return 2
     try:
-        cfg = load_config(config_path) if config_path else load_default_config()
+        cfg = _load_runtime_config(config_path)
         apply_cli_overrides(cfg, args)
         if cfg.analyze.target_clips < 1:
             raise ValueError("--clips must be at least 1")
         if args.limit_minutes is not None and args.limit_minutes <= 0:
             raise ValueError("--limit-minutes must be greater than zero")
-        _load_dotenv()
-        if config_path is not None:
-            _load_dotenv(config_path.resolve().parent / ".env")
         _check_setup(cfg)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"error: {exc}", file=sys.stderr)
