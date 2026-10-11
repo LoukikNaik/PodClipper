@@ -7,6 +7,23 @@
 
 Repo: `github.com/LoukikNaik/PodClipper` · Live demo: `podclipper.loukik.dev`
 
+## Commits and releases
+
+- Do not add `Co-Authored-By` trailers or AI attribution to commits.
+- After successfully merging changes into `main`, or committing and pushing
+  changes directly to `main`, ask the user whether they want a new PyPI release.
+  Check the latest published version and suggest the next appropriate version,
+  usually a patch bump for fixes: "Do you want to release vX.Y.Z to PyPI?"
+- Wait for the user's answer before creating or pushing a release tag. If the
+  user already explicitly requested that release, proceed without asking again.
+- A new `vX.Y.Z` tag triggers `.github/workflows/publish-pypi.yml` and publishes
+  version `X.Y.Z` automatically. Versions come from tags; do not manually edit
+  version numbers in the code, move published tags, or reuse released versions.
+- Follow `docs/RELEASING.md` for release commands and monitor the workflow until
+  it finishes. Confirm the version is available on PyPI before reporting success.
+- PodClipper is licensed under `AGPL-3.0-only`; keep `LICENSE`, `NOTICE`, and
+  package metadata consistent. Ultralytics YOLO remains the person detector.
+
 ## Read this before naming or renaming anything
 
 `docs/ubiquitous-language.md` is the single source of truth for every named

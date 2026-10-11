@@ -92,6 +92,30 @@ If `pipx ensurepath` asks you to reopen your terminal, do that before running
 `podclipper`. Existing users upgrade with `pipx upgrade podclipper`.
 Inside an activated Python environment, `pip install podclipper` works too.
 
+## Homebrew releases
+
+The public tap is [LoukikNaik/homebrew-tap](https://github.com/LoukikNaik/homebrew-tap).
+It supports Apple Silicon Macs running macOS 14 or newer:
+
+```bash
+brew install loukiknaik/tap/podclipper
+```
+
+Homebrew installs Python 3.12 and FFmpeg and keeps PodClipper's Python packages
+in an isolated environment. Users upgrade with `brew update` followed by
+`brew upgrade podclipper`.
+
+After a PyPI release succeeds, the tap's **Update PodClipper** workflow checks
+PyPI every six hours, resolves compatible wheels, and commits the updated formula
+and dependency hashes. No extra repository token or PyPI credential is needed.
+For an immediate update, open the tap's **Actions → Update PodClipper → Run
+workflow** and enter the published version, such as `0.1.1`, without `v`.
+Check that workflow finishes successfully before announcing Homebrew availability.
+
+The tap uses pinned upstream binary wheels for native ML dependencies. It is
+maintained separately from Homebrew's core repository; users install with the
+full `loukiknaik/tap/podclipper` name.
+
 ## License
 
 New releases use **AGPL-3.0-only**, including the full `LICENSE` and attribution

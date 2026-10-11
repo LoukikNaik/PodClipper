@@ -19,17 +19,44 @@ clip selection, title review, caption correction, and content scoring.
 
 ### 1. Install
 
-Use **Python 3.10–3.12** and install FFmpeg (which includes `ffprobe`):
+**Apple Silicon Mac, macOS 14 or newer:** one command installs PodClipper,
+Python 3.12, and FFmpeg:
+
+```bash
+brew install loukiknaik/tap/podclipper
+```
+
+Upgrade with `brew update && brew upgrade podclipper`.
+
+**Other platforms or an existing Python environment:** use **Python 3.10–3.12**
+and install FFmpeg (which includes `ffprobe`):
 
 ```bash
 # macOS
 brew install ffmpeg
-
 # Ubuntu / Debian
 sudo apt install ffmpeg
 ```
 
-Install from this repository:
+Inside an activated virtual environment, install the published package:
+
+```bash
+pip install podclipper
+```
+
+Alternatively, pipx manages the virtual environment for you. For example, on macOS:
+
+```bash
+brew install ffmpeg pipx python@3.12
+pipx ensurepath
+pipx install --python python3.12 podclipper
+```
+
+Reopen your terminal if `pipx ensurepath` asks you to. Upgrade later with
+`pipx upgrade podclipper`.
+
+<details>
+<summary>Developing locally? Install from source</summary>
 
 ```bash
 git clone https://github.com/LoukikNaik/PodClipper.git
@@ -39,17 +66,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-After the first PyPI release is published, you can install without cloning:
-
-```bash
-# macOS: install the system tools and a supported Python
-brew install ffmpeg pipx python@3.12
-pipx ensurepath
-pipx install --python python3.12 podclipper
-```
-
-Reopen your terminal if `pipx ensurepath` asks you to. Pipx manages PodClipper's
-virtual environment for you. Upgrade later with `pipx upgrade podclipper`.
+</details>
 
 ### 2. Set your API key once
 
