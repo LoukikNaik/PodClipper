@@ -250,6 +250,10 @@ in the minimal config.
 2. Transcribe the podcast locally with Whisper.
 3. Ask the LLM for clips, refine their boundaries, and review each cut and title.
 4. For each accepted clip, detect speakers and transcribe again for caption timing.
+   Check local speech coverage against the audio and available first-pass words,
+   then retry suspicious sections with surrounding context. Cached captions get
+   the same checks. Unresolved gaps stop that clip before export; the default
+   cache saves retry details in `words.quality.json`.
 5. Correct caption words, crop to 9:16, and burn in captions and the title.
 6. Export the MP4 and a content scorecard.
 

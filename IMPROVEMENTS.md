@@ -1,5 +1,44 @@
 # Improvements
 
+## Implemented: local retries for missing caption speech
+
+Found in the v0.1.2 agent reel **Work All-Out Till 35, Then Enjoy**, from
+source `JqwfZdW4WvI`, bounds 1318.64–1395.04 seconds. Around reel time
+20–40 seconds, second-pass Whisper drops speech and assigns `करेंगे` to
+28.06–37.64 seconds, followed by `करने` at 37.64–40.32 seconds.
+
+The cached transcript contains 145 words over 76.67 seconds, above the current
+1.5 words/second retry threshold. That whole-clip average misses local failures.
+Cache loading skips transcription checks, and caption cleanup cannot recover
+speech absent from its input. The agent's sampled review approved this draft
+despite noting transcript uncertainty.
+
+An isolated large-v3 retry of reel time 20–44 seconds recovered 57 words,
+including the missing discussion of ambitions, money and building a home.
+A corrected caption export is saved locally under the agent's ignored
+`data/reels/v0.1.2/2026-10-11/caption-fix/` directory.
+
+The automatic caption pass now checks Silero speech regions, unusually long
+word timings, local word density, and available first-pass word counts. It
+validates cached captions too and retries only suspicious audio sections with
+context. Replacement words use clip-relative timestamps and matching context
+words to preserve boundaries. Repaired caches are written atomically.
+
+Defaults allow two attempts per affected section, at most eight retry windows,
+and at most 24 seconds of audio per window including four seconds of context on
+each side. Unresolved coverage stops that clip before cleanup or export.
+`words.quality.json` records outcomes. Settings remain internal defaults under
+`transcribe.caption_repair`, with optional YAML overrides.
+
+These checks detect likely omissions, not every wrong word. Speech detection
+and the first pass can make mistakes. Slower speech may need threshold tuning;
+first-pass text is used only to flag omissions, never as replacement captions.
+
+Running the new recovery on the original broken cache detected reel time
+24–42 seconds, retried 20–44 seconds once, and increased the caption transcript
+from 145 to 179 words. The repaired transcript passed all coverage checks.
+Local evidence is under ignored `outputs/caption_coverage_repair/`.
+
 ## Implemented: divider-aware podcast crops and cut transitions
 
 The Rashmika/Vijay/Shubhankar episode contains edited two- and three-view

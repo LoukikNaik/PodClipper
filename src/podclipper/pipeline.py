@@ -160,11 +160,18 @@ def run_pipeline(
                  f"of {meta.duration:.0f}s for clip selection")
 
     cache = _cache_dir_for(cfg, input_path)
+    transcript = None
+    transcript_cache = cache / f"first_pass_transcript{limit_tag}.json"
     if selection_path is not None and select_only:
         raise ValueError("Cannot combine a saved selection with select_only")
     if selection_path is not None:
         clips = _load_saved_selection(Path(selection_path), meta.path, meta.duration)
         log.info(f"Rendering {len(clips)} saved clips from {selection_path}")
+        if use_cache and transcript_cache.exists():
+            try:
+                transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
+            except (KeyError, TypeError, ValueError):
+                log.warning("First-pass caption reference is unreadable; using audio speech checks only")
     else:
         audio_wav = cache / f"audio{limit_tag}.wav"
         extract_audio(
@@ -175,7 +182,6 @@ def run_pipeline(
             duration_limit=source_limit,
         )
 
-        transcript_cache = cache / f"first_pass_transcript{limit_tag}.json"
         if use_cache and transcript_cache.exists():
             log.info(f"Reusing cached first-pass transcript: {transcript_cache}")
             transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
@@ -272,6 +278,14 @@ def run_pipeline(
 
                 crop_mode = getattr(cfg.crop, "mode", "auto")
                 words_cache = clip_cache / "words.json" if use_cache else None
+                segment_start = max(0, clip.start - cfg.clip_extract.pad_seconds)
+                segment_end = min(meta.duration, clip.end + cfg.clip_extract.pad_seconds)
+                reference_words = [
+                    Word(max(0, w.start - segment_start), min(segment_end, w.end) - segment_start,
+                         w.text, w.confidence)
+                    for segment in transcript.segments for w in segment.words
+                    if w.start < segment_end and w.end > segment_start
+                ] if transcript is not None else None
 
                 per_frame_persons: list[list] = []
 
@@ -279,7 +293,8 @@ def run_pipeline(
                     per_frame_persons, _per_frame_has_face, clip_fps, clip_w, clip_h = (
                         detect_humans_all_per_frame(segment_path, cfg)
                     )
-                    words = transcribe_second_pass_cached(segment_path, words_cache, cfg)
+                    words = transcribe_second_pass_cached(segment_path, words_cache, cfg,
+                                                          reference_words=reference_words)
                     per_frame = [
                         max(ps, key=lambda b: b.area) if ps else None
                         for ps in per_frame_persons
@@ -288,7 +303,8 @@ def run_pipeline(
                     # DEPRECATED `crop.mode: single` branch.
                     per_frame, clip_fps, clip_w, clip_h = detect_humans_per_frame(segment_path, cfg)
                     with ThreadPoolExecutor(max_workers=2) as ex:
-                        f_words = ex.submit(transcribe_second_pass_cached, segment_path, words_cache, cfg)
+                        f_words = ex.submit(transcribe_second_pass_cached, segment_path, words_cache, cfg,
+                                            reference_words=reference_words)
                         f_diar = ex.submit(_maybe_diarize, segment_path, cfg)
                         words = f_words.result()
                         diar_segments = f_diar.result()

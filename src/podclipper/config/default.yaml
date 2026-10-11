@@ -40,6 +40,18 @@ transcribe:
     device: auto
     beam_size: 5                 # accuracy matters more here (subtitles)
     word_timestamps: true
+  caption_repair:
+    enabled: true
+    window_seconds: 6.0
+    min_speech_seconds: 1.5
+    min_words_per_speech_second: 0.65
+    max_word_seconds: 2.5
+    context_seconds: 4.0
+    max_retry_seconds: 24.0
+    max_attempts: 2
+    max_windows: 8
+    reference_min_words: 4
+    reference_ratio: 0.35
   cleanup:                       # LLM post-processing of second-pass words
     enabled: true
     transliterate: true          # romanize non-Latin scripts (Hindi, Urdu, Arabic, ...)

@@ -2,6 +2,7 @@
 
 from importlib import resources
 from pathlib import Path
+import math
 from types import SimpleNamespace
 from typing import Any
 
@@ -57,6 +58,19 @@ def _resolve(raw: dict, overrides: dict) -> SimpleNamespace:
         raise ValueError("llm.num_retries must be a nonnegative integer")
     if llm["timeout_seconds"] <= 0 or isinstance(llm["timeout_seconds"], bool):
         raise ValueError("llm.timeout_seconds must be greater than zero")
+    repair = merged["transcribe"]["caption_repair"]
+    for key in ("window_seconds", "min_speech_seconds", "min_words_per_speech_second",
+                "max_word_seconds", "max_retry_seconds", "reference_ratio"):
+        if isinstance(repair[key], bool) or not math.isfinite(repair[key]) or repair[key] <= 0:
+            raise ValueError(f"transcribe.caption_repair.{key} must be finite and greater than zero")
+    for key in ("max_attempts", "max_windows", "reference_min_words"):
+        if type(repair[key]) is not int or repair[key] < 1:
+            raise ValueError(f"transcribe.caption_repair.{key} must be a positive integer")
+    if (isinstance(repair["context_seconds"], bool) or not math.isfinite(repair["context_seconds"])
+            or repair["context_seconds"] < 0 or repair["max_retry_seconds"] <= 2 * repair["context_seconds"]):
+        raise ValueError("transcribe.caption_repair.max_retry_seconds must exceed twice the nonnegative context_seconds")
+    if repair["reference_ratio"] > 1:
+        raise ValueError("transcribe.caption_repair.reference_ratio must be at most one")
     dividers = merged["crop"]["panel_dividers"]
     cuts = merged["crop"]["scene_cuts"]
     if not isinstance(cuts["enabled"], bool):

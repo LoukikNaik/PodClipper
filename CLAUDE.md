@@ -77,6 +77,7 @@ Source video
 | `src/podclipper/audio.py` | Whole-video audio extraction. |
 | `src/podclipper/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). Engine behind `cfg.transcribe.engine` = `faster` (default, faster-whisper) \| `mlx` (Apple-Silicon GPU). Auto-detects language per clip; VAD + `condition_on_previous_text=false` guard against hallucination; garble-retry re-runs with `fallback_languages` when auto-detect returns a suspiciously sparse transcript. |
 | `src/podclipper/transcribe_cleanup.py` | LLM post-pass to fix Whisper mis-spellings / transliterate non-Latin. |
+| `src/podclipper/transcribe_repair.py` | Audio speech coverage and first-pass comparison for caption gaps. Retries bounded windows with context, including cached captions; unresolved gaps stop clip export. Internal overrides live in `transcribe.caption_repair`; `words.quality.json` records retries. |
 | `src/podclipper/analyze.py` | LLM clip selection — reads transcript, returns `Clip[]`. |
 | `src/podclipper/llm/` | Provider abstraction. `litellm_provider.py` (shared OpenAI-compatible endpoint client). |
 | `src/podclipper/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |

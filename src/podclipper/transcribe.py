@@ -16,6 +16,7 @@ import numpy as np
 
 from .audio import ChunkRange, plan_chunks
 from .types import Transcript, TranscriptSegment, Word
+from .transcribe_repair import repair_caption_words
 
 log = logging.getLogger("ave.transcribe")
 
@@ -286,6 +287,9 @@ def transcribe_first_pass(
 def transcribe_second_pass(
     clip_audio_or_video: Path,
     cfg: SimpleNamespace,
+    *,
+    reference_words: list[Word] | None = None,
+    quality_report_path: Path | None = None,
 ) -> list[Word]:
     """High-quality single-shot transcription of an extracted clip; returns
     word-level timestamps, clip-relative."""
@@ -332,8 +336,32 @@ def transcribe_second_pass(
                     best_words, best_wps = fwords, fwps
             words = best_words
 
+    words = _repair_second_pass(words, audio, cfg, reference_words, quality_report_path)
     log.info(f"Second pass on {clip_audio_or_video.name}: {len(words)} words")
     return words
+
+
+def _repair_second_pass(words, audio, cfg, reference_words, report_path):
+    """Check speech coverage and lazily load Whisper for local retries."""
+    repair_cfg = getattr(cfg.transcribe, "caption_repair", None)
+    if repair_cfg is None or not repair_cfg.enabled:
+        return words
+    sp = cfg.transcribe.second_pass
+
+    def retry(start, end):
+        engine = _resolve_engine(getattr(cfg.transcribe, "engine", "faster"))
+        model = _mlx_repo(sp.model) if engine == "mlx" else _get_model(sp.model, sp.compute_type, sp.device)
+        segments, _ = _transcribe_array(
+            model, audio[round(start * _WHISPER_SAMPLE_RATE):round(end * _WHISPER_SAMPLE_RATE)],
+            engine=engine, language=cfg.transcribe.language, beam_size=sp.beam_size,
+            word_timestamps=True, time_offset=start,
+            vad_filter=getattr(cfg.transcribe, "vad_filter", True),
+            condition_on_previous_text=False,
+        )
+        return [word for segment in segments for word in segment.words]
+
+    return repair_caption_words(audio, words, repair_cfg, retry,
+                                reference_words=reference_words, report_path=report_path)
 
 
 def _words_to_json(words: list[Word]) -> list[dict]:
@@ -351,23 +379,34 @@ def transcribe_second_pass_cached(
     clip_audio_or_video: Path,
     cache_path: Optional[Path],
     cfg: SimpleNamespace,
+    *,
+    reference_words: list[Word] | None = None,
 ) -> list[Word]:
     """Same as `transcribe_second_pass` but caches to `cache_path` as JSON.
     Pass cache_path=None to bypass caching."""
+    words = None
+    report_path = cache_path.with_suffix(".quality.json") if cache_path is not None else None
     if cache_path is not None and cache_path.exists():
         try:
             data = json.loads(cache_path.read_text())
             words = _words_from_json(data)
             log.info(f"Loaded {len(words)} cached words from {cache_path.name}")
-            return words
         except Exception as e:  # noqa: BLE001
             log.warning(f"Failed to load words cache {cache_path} ({e}); re-transcribing")
+            words = None
 
-    words = transcribe_second_pass(clip_audio_or_video, cfg)
+    if words is None:
+        words = transcribe_second_pass(clip_audio_or_video, cfg, reference_words=reference_words,
+                                       quality_report_path=report_path)
+    elif getattr(getattr(cfg.transcribe, "caption_repair", None), "enabled", False):
+        audio = _decode_audio_to_float32(clip_audio_or_video)
+        words = _repair_second_pass(words, audio, cfg, reference_words, report_path)
     if cache_path is not None:
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps(_words_to_json(words), ensure_ascii=False, indent=2))
+            temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
+            temporary.write_text(json.dumps(_words_to_json(words), ensure_ascii=False, indent=2))
+            temporary.replace(cache_path)
             log.info(f"Cached {len(words)} words → {cache_path.name}")
         except Exception as e:  # noqa: BLE001
             log.warning(f"Failed to write words cache {cache_path}: {e}")
