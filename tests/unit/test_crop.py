@@ -64,3 +64,14 @@ def test_pick_performer_clamps_out_of_bounds_bbox() -> None:
     p = _bbox(-50, -30, 400, 900)  # extends past top-left
     assert _pick_performer(frame, [p], floor=200, src_w=SRC_W, src_h=SRC_H,
                            bright_w=1.0, top_w=0.5) is p
+
+
+def test_pose_crop_keeps_aspect_when_requested_height_exceeds_source():
+    from podclipper.crop import _bbox_from_pose_anchors
+    for source_width, source_height in ((1920, 1080), (640, 1080)):
+        x, y, w, h = _bbox_from_pose_anchors(
+            {'nose': (source_width / 2, 300), 'shoulder_mid': (source_width / 2, 1000)},
+            source_width, source_height, panel_aspect=9/8)
+        assert 0 <= x < x+w <= source_width
+        assert 0 <= y < y+h <= source_height
+        assert abs(w/h - 9/8) < .01

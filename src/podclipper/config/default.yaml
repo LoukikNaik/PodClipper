@@ -126,6 +126,17 @@ crop:
   ffmpeg_encoder: libx264
   ffmpeg_crf: 20
   ffmpeg_preset: medium
+  panel_dividers:                # respect edited split-screen source views
+    enabled: true
+    min_coverage: 0.90           # fraction of sampled rows containing the line
+    max_width_frac: 0.008        # reject broad bright/dark scene regions
+    min_panel_frac: 0.15        # reject lines too close to an edge/another line
+    min_contrast: 25.0          # line must contrast with both adjacent views
+    margin_pixels: 2            # exclude the line and its compressed edge
+  scene_cuts:
+    enabled: true               # fresh framing at image or divider-layout cuts
+    difference_threshold: 30.0  # mean thumbnail pixel change (0–255)
+    crossfade_seconds: 0.12     # brief dissolve; zero keeps the source's hard cut
   # Shot classifier (auto mode): when a frame has ≥2 person bboxes that are
   # each <height_cap_frac of source height AND separated by >=sep_frac of
   # source width, the frame is "wide" and gets stacked dual-panel rendering.

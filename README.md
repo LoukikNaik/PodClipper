@@ -113,6 +113,16 @@ sidecars contain source timestamps, selection reasons, and review scores.
 The CLI prints the saved file paths when it finishes. It aims for the configured
 clip count; it may export fewer when candidates are rejected or processing fails.
 
+For podcasts with edited split screens, the cropper detects thin light/dark
+vertical divider lines and keeps each crop inside its source panel. It shows at
+most two views, resets framing when the panel layout changes, and excludes the
+divider itself. Stacked views fill the frame. Detected camera and column changes reset
+tracking to a fresh crop, even for the same person, with a brief crossfade and
+no added zoom animation. Advanced overrides are under `crop.panel_dividers` and
+`crop.scene_cuts`; set `crop.scene_cuts.crossfade_seconds: 0` for hard cuts.
+Choosing views uses visible person size, not active-speaker
+identification. Faint, broken, or decorative dividers may not be recognized.
+
 ## Everyday commands
 
 ```bash

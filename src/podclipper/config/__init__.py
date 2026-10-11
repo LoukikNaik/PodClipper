@@ -57,6 +57,22 @@ def _resolve(raw: dict, overrides: dict) -> SimpleNamespace:
         raise ValueError("llm.num_retries must be a nonnegative integer")
     if llm["timeout_seconds"] <= 0 or isinstance(llm["timeout_seconds"], bool):
         raise ValueError("llm.timeout_seconds must be greater than zero")
+    dividers = merged["crop"]["panel_dividers"]
+    cuts = merged["crop"]["scene_cuts"]
+    if not isinstance(cuts["enabled"], bool):
+        raise ValueError("crop.scene_cuts.enabled must be a boolean")
+    if (isinstance(cuts["crossfade_seconds"], bool)
+            or not 0 <= cuts["crossfade_seconds"] <= 1):
+        raise ValueError("crop.scene_cuts.crossfade_seconds must be between zero and one")
+    if (isinstance(cuts["difference_threshold"], bool)
+            or not 0 < cuts["difference_threshold"] <= 255):
+        raise ValueError("crop.scene_cuts.difference_threshold must be greater than zero and at most 255")
+    for key, maximum in (("min_coverage", 1.0), ("max_width_frac", 0.05),
+                         ("min_panel_frac", 0.5), ("min_contrast", 255.0)):
+        if isinstance(dividers[key], bool) or not 0 < dividers[key] <= maximum:
+            raise ValueError(f"crop.panel_dividers.{key} must be greater than zero and at most {maximum}")
+    if isinstance(dividers["margin_pixels"], bool) or dividers["margin_pixels"] < 1:
+        raise ValueError("crop.panel_dividers.margin_pixels must be at least 1")
     content, output = merged["content"], merged["output"]
     if content["type"] not in ("podcast", "comedy"):
         raise ValueError("content.type must be podcast or comedy")

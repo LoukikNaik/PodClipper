@@ -54,3 +54,27 @@ def test_resolved_public_settings_match_internal_overrides(tmp_path):
     path.write_text("content:\n  clips: 3\nanalyze:\n  target_clips: 5\n")
     cfg = load_config(path)
     assert cfg.content.clips == cfg.analyze.target_clips == 5
+
+
+@pytest.mark.parametrize('setting,value', [
+    ('panel_dividers.margin_pixels', 'true'),
+    ('panel_dividers.margin_pixels', '0'),
+    ('panel_dividers.min_coverage', '1.1'),
+    ('scene_cuts.crossfade_seconds', '-0.1'),
+    ('scene_cuts.crossfade_seconds', '.nan'),
+    ('scene_cuts.difference_threshold', '0'),
+])
+def test_invalid_crop_controls_rejected(tmp_path, setting, value):
+    section, field = setting.split('.')
+    path = tmp_path / 'config.yaml'
+    path.write_text(f'crop:\n  {section}:\n    {field}: {value}\n')
+    with pytest.raises(ValueError, match=field):
+        load_config(path)
+
+
+def test_hard_cuts_and_disabled_dividers_are_overridable(tmp_path):
+    path = tmp_path / 'config.yaml'
+    path.write_text('crop:\n  panel_dividers:\n    enabled: false\n  scene_cuts:\n    crossfade_seconds: 0\n')
+    cfg = load_config(path)
+    assert not cfg.crop.panel_dividers.enabled
+    assert cfg.crop.scene_cuts.crossfade_seconds == 0

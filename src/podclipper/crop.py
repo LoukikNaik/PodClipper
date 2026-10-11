@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from .types import BBox, Timeline, TimelineSegment
+from .panels import SourcePanel, constrain_crop, detect_source_panels, panel_for_x
 
 log = logging.getLogger("ave.crop")
 
@@ -164,6 +165,7 @@ def smart_crop_916(
     smoothed_x: Optional[float] = None
     last_segment_idx = -1
     last_known_x: Optional[float] = None
+    previous_panel: Optional[SourcePanel] = None
 
     frame_idx = 0
     try:
@@ -199,13 +201,18 @@ def smart_crop_916(
             else:
                 target_x = src_w / 2
 
+            source_panels = detect_source_panels(frame, getattr(cfg.crop, "panel_dividers", None))
+            source_panel = panel_for_x(source_panels, target_x)
+            if previous_panel != source_panel:
+                smoothed_x = None
+            previous_panel = source_panel
             smoothed_x = target_x if smoothed_x is None else (alpha * target_x + (1 - alpha) * smoothed_x)
 
             x_start, x_end = _compute_crop_window(smoothed_x, src_w, crop_w)
-            cropped = frame[:, x_start:x_end]
-            if cropped.shape[1] != crop_w:
-                pad = crop_w - cropped.shape[1]
-                cropped = cv2.copyMakeBorder(cropped, 0, 0, 0, pad, cv2.BORDER_CONSTANT)
+            x_start, y_start, bounded_w, bounded_h = constrain_crop(
+                (x_start, 0, crop_w, crop_h), source_panel, src_h)
+            x_end = x_start + bounded_w
+            cropped = frame[y_start:y_start + bounded_h, x_start:x_end]
 
             resized = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_AREA)
             resized = _apply_intro_zoom(resized, frame_idx, iz_frames, iz_max)
@@ -225,7 +232,7 @@ def smart_crop_916(
                         (int(bbox.x + bbox.w), int(bbox.y + bbox.h)),
                         (0, 255, 255), 2,
                     )
-                cv2.rectangle(dbg, (x_start, 0), (x_end, src_h), (0, 255, 0), 3)
+                cv2.rectangle(dbg, (x_start, y_start), (x_end, y_start + bounded_h), (0, 255, 0), 3)
                 cv2.putText(
                     dbg, f"seg {seg_idx}: {seg.label} t={t:.2f}s",
                     (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2,
@@ -296,6 +303,7 @@ def _pose_anchors_for_person(
     frame_bgr: np.ndarray,
     person_bbox: BBox,
     pose_landmarker,
+    source_panel: Optional[SourcePanel] = None,
 ) -> Optional[dict]:
     """Pose Landmarker on a padded person crop; returns source-pixel
     {nose, shoulder_mid} or None on miss / low visibility."""
@@ -309,6 +317,9 @@ def _pose_anchors_for_person(
     y0 = max(0, py - pad_y)
     x1 = min(W, px + pw + pad_x)
     y1 = min(H, py + ph + pad_y)
+    if source_panel is not None:
+        x0 = max(source_panel.left, x0)
+        x1 = min(source_panel.right, x1)
     if x1 <= x0 or y1 <= y0:
         return None
 
@@ -356,15 +367,15 @@ def _bbox_from_pose_anchors(
     head_h = max(8.0, abs(sy - nose_y))
     panel_top = nose_y - 1.5 * head_h
     panel_bot = nose_y + 3.5 * head_h
-    panel_h = panel_bot - panel_top
+    panel_h = min(panel_bot - panel_top, src_h, src_w / panel_aspect)
     panel_w = panel_h * panel_aspect
     cx = nose_x
 
     def _snap(v: float) -> int:
         return int(round(v / snap_px) * snap_px)
 
-    crop_h = _snap(min(panel_h, src_h))
-    crop_w = _snap(min(panel_w, src_w))
+    crop_h = max(1, min(src_h, _snap(panel_h)))
+    crop_w = max(1, min(src_w, _snap(panel_w)))
     y0 = _snap(panel_top)
     x0 = _snap(cx - crop_w / 2)
     y0 = max(0, min(src_h - crop_h, y0))
@@ -404,8 +415,8 @@ def _bbox_within(a: tuple[int, int, int, int],
 def _render_from_bbox(frame: np.ndarray, bbox: tuple[int, int, int, int],
                      panel_w: int, panel_h: int) -> np.ndarray:
     x, y, w, h = bbox
-    return cv2.resize(frame[y:y + h, x:x + w], (panel_w, panel_h),
-                      interpolation=cv2.INTER_AREA)
+    crop = frame[y:y + h, x:x + w]
+    return cv2.resize(crop, (panel_w, panel_h), interpolation=cv2.INTER_AREA)
 
 
 def _intro_zoom_params(cfg: SimpleNamespace, fps: float) -> tuple[int, float]:
@@ -464,6 +475,8 @@ def _pick_performer(
 def _fallback_single_panel(
     frame: np.ndarray, cx: float, src_w: int, src_h: int,
     panel_w: int, panel_h: int, panel_aspect: float,
+    source_panel: Optional[SourcePanel] = None,
+    focus_y: Optional[float] = None,
 ) -> np.ndarray:
     """Centered, full-height crop at panel_aspect — used when pose fails."""
     crop_h = src_h
@@ -472,7 +485,39 @@ def _fallback_single_panel(
         crop_w = src_w
     x0 = int(round(cx - crop_w / 2))
     x0 = max(0, min(src_w - crop_w, x0))
-    return _render_from_bbox(frame, (x0, 0, crop_w, crop_h), panel_w, panel_h)
+    bounded = constrain_crop((x0, 0, crop_w, crop_h),
+                             source_panel or SourcePanel(0, src_w), src_h, focus_y)
+    return _render_from_bbox(frame, bounded, panel_w, panel_h)
+
+
+def _scene_signature(frame: np.ndarray) -> np.ndarray:
+    """Ignore small pixel noise while retaining hard camera/framing changes."""
+    small = cv2.resize(frame, (64, 36), interpolation=cv2.INTER_AREA)
+    return cv2.GaussianBlur(small, (3, 3), 0).astype(np.float32)
+
+
+class _CutTransition:
+    """Short dissolve at a cut, without removing frames or changing audio timing."""
+
+    def __init__(self, duration_frames: int):
+        self.duration = max(0, duration_frames)
+        self.previous = None
+        self.origin = None
+        self.elapsed = 0
+
+    def apply(self, frame: np.ndarray, cut: bool) -> np.ndarray:
+        if cut and self.previous is not None and self.duration > 1:
+            self.origin = self.previous
+            self.elapsed = 0
+        if self.origin is not None:
+            self.elapsed += 1
+            p = min(1.0, self.elapsed / self.duration)
+            alpha = p * p * (3.0 - 2.0 * p)
+            frame = cv2.addWeighted(self.origin, 1.0 - alpha, frame, alpha, 0)
+            if self.elapsed >= self.duration:
+                self.origin = None
+        self.previous = frame
+        return frame
 
 
 def smart_crop_916_stacked(
@@ -520,6 +565,7 @@ def smart_crop_916_stacked(
     src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     height_cap = height_cap_frac * src_h
+    height_floor = float(getattr(cfg.crop, "shot_min_person_frac", 0.20)) * src_h
     comedy_floor = comedy_floor_frac * src_h
     if comedy_mode:
         log.info(f"Comedy mode: single-performer lock via brightness+geometry "
@@ -533,6 +579,12 @@ def smart_crop_916_stacked(
         f"({100*n_wide/max(1,len(per_frame_persons)):.1f}%), fps={fps:.2f})"
     )
 
+    cuts = getattr(cfg.crop, "scene_cuts", None)
+    detect_cuts = bool(getattr(cuts, "enabled", True))
+    difference_threshold = float(getattr(cuts, "difference_threshold", 30.0))
+    cut_transition = _CutTransition(
+        round(float(getattr(cuts, "crossfade_seconds", 0.12)) * fps) if detect_cuts else 0)
+    previous_signature = None
     pose_landmarker = _get_pose_landmarker(cfg)
 
     tmp_video = Path(tempfile.mkstemp(prefix="ave_stack_", suffix=".mp4")[1])
@@ -551,7 +603,9 @@ def smart_crop_916_stacked(
     #   rendered: lerps toward `target` by `transition_alpha` per frame
     #   miss:     consecutive YOLO/Pose failure count
     def _new_slot() -> dict:
-        return {"body": None, "target": None, "rendered": None, "miss": 0}
+        return {"body": None, "target": None, "rendered": None, "miss": 0,
+                "panel": SourcePanel(0, src_w), "focus": None, "rendered_focus": None,
+                "edited": False}
 
     state: dict[str, dict] = {
         "top": _new_slot(),
@@ -563,6 +617,20 @@ def smart_crop_916_stacked(
         state[slot] = _new_slot()
 
     def _advance_render(s: dict) -> tuple[int, int, int, int]:
+        if s["edited"] and s["focus"] is not None:
+            # Use the widest filled crop available in this source view. Cuts
+            # reset the framing; no anticipatory zoom or crop-size animation.
+            height = max(1, int(min(src_h, s["panel"].width / panel_aspect)))
+            width = max(1, int(round(height * panel_aspect)))
+            focus = s["focus"]
+            if s["rendered_focus"] is not None:
+                focus = tuple(a + (b - a) * transition_alpha
+                              for a, b in zip(s["rendered_focus"], focus))
+            s["rendered_focus"] = focus
+            bbox = (round(focus[0] - width / 2), round(focus[1] - height * 0.40),
+                    width, height)
+            s["rendered"] = constrain_crop(bbox, s["panel"], src_h)
+            return s["rendered"]
         if s["rendered"] is None:
             s["rendered"] = s["target"]
         elif s["target"] is not None and s["rendered"] != s["target"]:
@@ -571,19 +639,31 @@ def smart_crop_916_stacked(
             if _bbox_within(new_rendered, s["target"], 1):
                 new_rendered = s["target"]
             s["rendered"] = new_rendered
+        s["rendered"] = constrain_crop(s["rendered"], s["panel"], src_h)
         return s["rendered"]
 
     def _panel_with_pose(slot: str, frame: np.ndarray,
-                         person_bbox: Optional[BBox]) -> np.ndarray:
+                         person_bbox: Optional[BBox], source_panel: SourcePanel) -> np.ndarray:
         s = state[slot]
+        previous = s["panel"]
+        if (abs(previous.left - source_panel.left) > snap_px
+                or abs(previous.right - source_panel.right) > snap_px):
+            _reset(slot)
+            s = state[slot]
+        s["panel"] = source_panel
+        s["edited"] = source_panel.width < src_w
 
         if person_bbox is None:
             s["miss"] += 1
+            if s["edited"]:
+                if s["focus"] is None or s["miss"] > miss_tolerance:
+                    s["focus"] = ((source_panel.left + source_panel.right) / 2, src_h * 0.40)
+                return _render_from_bbox(frame, _advance_render(s), panel_w, panel_h)
             if s["rendered"] is not None and s["miss"] <= miss_tolerance:
                 return _render_from_bbox(frame, _advance_render(s),
                                          panel_w, panel_h)
-            return _fallback_single_panel(frame, src_w / 2, src_w, src_h,
-                                          panel_w, panel_h, panel_aspect)
+            return _fallback_single_panel(frame, (source_panel.left + source_panel.right) / 2,
+                                          src_w, src_h, panel_w, panel_h, panel_aspect, source_panel)
 
         cur_body = _bbox_to_tuple(person_bbox)
         if (s["body"] is not None and s["target"] is not None
@@ -592,24 +672,38 @@ def smart_crop_916_stacked(
             return _render_from_bbox(frame, _advance_render(s),
                                      panel_w, panel_h)
 
-        anchors = _pose_anchors_for_person(frame, person_bbox, pose_landmarker)
+        # Pose must also stay inside this view; otherwise it can anchor to a
+        # neighbouring person's face before the resulting crop is constrained.
+        left = max(source_panel.left, person_bbox.x)
+        right = min(source_panel.right, person_bbox.x + person_bbox.w)
+        bounded_person = BBox(left, person_bbox.y, max(1, right - left),
+                              person_bbox.h, person_bbox.confidence)
+        anchors = _pose_anchors_for_person(frame, bounded_person, pose_landmarker, source_panel)
         if anchors is None:
             s["miss"] += 1
+            if s["edited"]:
+                if s["focus"] is None or s["miss"] > miss_tolerance:
+                    s["focus"] = (person_bbox.x_center, person_bbox.y + person_bbox.h * 0.18)
+                return _render_from_bbox(frame, _advance_render(s), panel_w, panel_h)
             if s["rendered"] is not None and s["miss"] <= miss_tolerance:
                 return _render_from_bbox(frame, _advance_render(s),
                                          panel_w, panel_h)
             return _fallback_single_panel(frame, person_bbox.x_center, src_w, src_h,
-                                          panel_w, panel_h, panel_aspect)
+                                          panel_w, panel_h, panel_aspect, source_panel,
+                                          person_bbox.y + person_bbox.h * 0.18)
 
         s["miss"] = 0
         new_target = _bbox_from_pose_anchors(anchors, src_w, src_h,
                                              panel_aspect, snap_px=snap_px)
         s["body"] = cur_body
-        s["target"] = new_target
+        s["focus"] = anchors["nose"]
+        s["target"] = constrain_crop(new_target, source_panel, src_h, anchors["nose"][1])
         return _render_from_bbox(frame, _advance_render(s),
                                  panel_w, panel_h)
 
     prev_is_wide: Optional[bool] = None
+    previous_panels: Optional[tuple[SourcePanel, ...]] = None
+    selected_panels: tuple[int, ...] = ()
     frame_idx = 0
     try:
         while True:
@@ -623,8 +717,37 @@ def smart_crop_916_stacked(
                 persons = per_frame_persons[frame_idx]
                 wide = bool(is_wide[frame_idx])
 
+            signature = _scene_signature(frame) if detect_cuts else None
+            image_cut = (previous_signature is not None and signature is not None
+                         and float(np.abs(signature - previous_signature).mean()) >= difference_threshold)
+            previous_signature = signature
+            source_panels = detect_source_panels(frame, getattr(cfg.crop, "panel_dividers", None))
+            layout_changed = (previous_panels is None or len(previous_panels) != len(source_panels)
+                              or any(abs(a.left - b.left) > snap_px or abs(a.right - b.right) > snap_px
+                                     for a, b in zip(previous_panels, source_panels)))
+            scene_cut = image_cut or (previous_panels is not None and layout_changed)
+            if layout_changed or scene_cut:
+                for slot in state:
+                    _reset(slot)
+                selected_panels = ()
+            previous_panels = source_panels
+
+            # Edited source panels are independent camera views. They need not
+            # satisfy the wide-shot person's-height heuristic to be rearranged.
+            if len(source_panels) > 1 and not comedy_mode:
+                occupied = {source_panels.index(panel_for_x(source_panels, p.x_center))
+                            for p in persons if p.h >= height_floor}
+                wide = len(occupied) >= 2
+            elif wide:
+                # Temporal classification can straddle a camera cut. Require
+                # two distinct foreground subjects in this frame before stacking.
+                current = [p.x_center for p in persons if height_floor <= p.h <= height_cap]
+                wide = (len(current) >= 2 and max(current) - min(current)
+                        >= float(getattr(cfg.crop, "shot_sep_frac", 0.20)) * src_w)
+
             # Reset locks across layout transitions
-            if prev_is_wide is not None and wide != prev_is_wide:
+            mode_changed = prev_is_wide is not None and wide != prev_is_wide
+            if mode_changed:
                 if wide:
                     _reset("top"); _reset("bot")
                 else:
@@ -632,17 +755,41 @@ def smart_crop_916_stacked(
             prev_is_wide = wide
 
             if wide:
-                qual = [(p.x_center, p) for p in persons if p.h < height_cap]
+                qual = [(p.x_center, p) for p in persons
+                        if ((len(source_panels) > 1 and p.h >= height_floor)
+                            or (len(source_panels) == 1 and height_floor <= p.h <= height_cap))]
                 qual.sort(key=lambda t: t[0])
-                left_bbox = qual[0][1] if len(qual) >= 1 else None
-                right_bbox = qual[-1][1] if len(qual) >= 2 else None
+                if len(source_panels) > 2:
+                    # At most two views. Select prominent participants once per
+                    # layout instead of dropping the middle view automatically
+                    # or switching panels whenever body-box sizes fluctuate.
+                    by_panel = {}
+                    for _, person in qual:
+                        index = source_panels.index(panel_for_x(source_panels, person.x_center))
+                        if index not in by_panel or person.area > by_panel[index].area:
+                            by_panel[index] = person
+                    if len(selected_panels) != 2:
+                        selected_panels = tuple(sorted(sorted(by_panel, key=lambda i: by_panel[i].area,
+                                                             reverse=True)[:2]))
+                    qual = [(by_panel[i].x_center, by_panel[i]) for i in selected_panels if i in by_panel]
+                if len(source_panels) > 2 and len(selected_panels) == 2:
+                    left_bbox = by_panel.get(selected_panels[0])
+                    right_bbox = by_panel.get(selected_panels[1])
+                    left_panel = source_panels[selected_panels[0]]
+                    right_panel = source_panels[selected_panels[1]]
+                else:
+                    left_bbox = qual[0][1] if len(qual) >= 1 else None
+                    right_bbox = qual[-1][1] if len(qual) >= 2 else None
+                    left_panel = panel_for_x(source_panels, left_bbox.x_center) if left_bbox else source_panels[0]
+                    right_panel = panel_for_x(source_panels, right_bbox.x_center) if right_bbox else source_panels[-1]
                 if top_is_right:
                     top_b, bot_b = right_bbox, left_bbox
                 else:
                     top_b, bot_b = left_bbox, right_bbox
 
-                top_panel = _panel_with_pose("top", frame, top_b)
-                bot_panel = _panel_with_pose("bot", frame, bot_b)
+                top_source, bot_source = ((right_panel, left_panel) if top_is_right else (left_panel, right_panel))
+                top_panel = _panel_with_pose("top", frame, top_b, top_source)
+                bot_panel = _panel_with_pose("bot", frame, bot_b, bot_source)
                 composite = np.vstack([top_panel, bot_panel])
                 composite[panel_h - 1:panel_h + 1, :] = (10, 10, 10)
                 dbg_boxes = [state["top"]["rendered"], state["bot"]["rendered"]]
@@ -657,17 +804,20 @@ def smart_crop_916_stacked(
                     chosen = _pick_performer(frame, persons, comedy_floor,
                                              src_w, src_h, comedy_bright_w, comedy_top_w)
                 else:
-                    for p in persons:
-                        if p.h < height_cap or len(persons) == 1:
-                            chosen = p
-                            break
-                    if chosen is None and persons:
-                        chosen = max(persons, key=lambda p: p.area)
+                    chosen = max(persons, key=lambda p: p.area, default=None)
 
                 crop_h = src_h
                 crop_w = max(1, int(round(crop_h * single_aspect)))
                 if crop_w > src_w:
                     crop_w = src_w
+
+                source_panel = panel_for_x(source_panels, chosen.x_center) if chosen else source_panels[0]
+                previous = s["panel"]
+                if (abs(previous.left - source_panel.left) > snap_px
+                        or abs(previous.right - source_panel.right) > snap_px):
+                    _reset("single")
+                    s = state["single"]
+                s["panel"] = source_panel
 
                 if chosen is None:
                     s["miss"] += 1
@@ -695,10 +845,12 @@ def smart_crop_916_stacked(
                             s["rendered"] = s["target"]
                     locked = _advance_render(s)
 
+                locked = constrain_crop(locked, source_panel, src_h)
                 composite = _render_from_bbox(frame, locked, target_w, target_h)
                 dbg_boxes = [locked]
 
             composite = _apply_intro_zoom(composite, frame_idx, iz_frames, iz_max)
+            composite = cut_transition.apply(composite, scene_cut or mode_changed)
             if debug_encoder is not None:
                 dbg = frame.copy()
                 for bb in dbg_boxes:
