@@ -28,4 +28,5 @@ def test_console_entry_point_podclipper_prints_help_and_exits_zero() -> None:
 
     assert result.returncode == 0
     assert "podclipper" in result.stdout.lower()
-    assert "--llm-provider" in result.stdout
+    assert "--type" in result.stdout
+    assert "--llm-provider" not in result.stdout

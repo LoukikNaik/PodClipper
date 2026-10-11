@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -107,16 +108,49 @@ def _maybe_diarize(segment_path: Path, cfg: SimpleNamespace):
     return diarize_clip(segment_path, cfg)
 
 
+def _load_saved_selection(path: Path, source: Path, duration: float) -> list[Clip]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("source"), str):
+        raise ValueError("Selection must contain its source video path")
+    if Path(data["source"]).resolve() != source.resolve():
+        raise ValueError("Saved selection belongs to a different source video")
+    if not isinstance(data.get("clips"), list) or not data["clips"]:
+        raise ValueError("Saved selection contains no clips")
+    clips = []
+    for i, item in enumerate(data["clips"], 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Invalid saved clip {i}")
+        start, end = item.get("start"), item.get("end")
+        if (type(start) not in (int, float) or type(end) not in (int, float)
+                or not math.isfinite(start) or not math.isfinite(end)
+                or not 0 <= start < end <= duration):
+            raise ValueError(f"Invalid source bounds for saved clip {i}")
+        title = item.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError(f"Missing title for saved clip {i}")
+        score = item.get("hook_score", 0.0)
+        if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1:
+            raise ValueError(f"Invalid hook score for saved clip {i}")
+        clips.append(Clip(start=float(start), end=float(end), title=title,
+                          reason=str(item.get("reason", "")), hook_score=float(score)))
+    return clips
+
+
 def run_pipeline(
     input_path: Path,
     cfg: SimpleNamespace,
     use_cache: bool = True,
+    select_only: bool = False,
+    selection_path: Path | None = None,
 ) -> list[Path]:
-    """Run the full reels pipeline; return paths of produced reels."""
+    """Return rendered reels, or selection reports when select_only is enabled."""
     input_path = Path(input_path)
     console = get_console()
 
     meta: VideoMeta = ingest(input_path)
+
+    if not meta.has_audio:
+        raise ValueError("This video has no audio track. Choose a podcast video with speech.")
 
     source_limit = getattr(cfg.analyze, "source_limit_seconds", None)
     analyze_duration = min(meta.duration, source_limit) if source_limit else meta.duration
@@ -126,31 +160,38 @@ def run_pipeline(
                  f"of {meta.duration:.0f}s for clip selection")
 
     cache = _cache_dir_for(cfg, input_path)
-    audio_wav = cache / f"audio{limit_tag}.wav"
-    extract_audio(
-        meta.path, audio_wav,
-        sample_rate=cfg.audio.sample_rate,
-        codec=cfg.audio.codec,
-        overwrite=not use_cache,
-        duration_limit=source_limit,
-    )
-
-    transcript_cache = cache / f"first_pass_transcript{limit_tag}.json"
-    if use_cache and transcript_cache.exists():
-        log.info(f"Reusing cached first-pass transcript: {transcript_cache}")
-        transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
+    if selection_path is not None and select_only:
+        raise ValueError("Cannot combine a saved selection with select_only")
+    if selection_path is not None:
+        clips = _load_saved_selection(Path(selection_path), meta.path, meta.duration)
+        log.info(f"Rendering {len(clips)} saved clips from {selection_path}")
     else:
-        transcript = transcribe_first_pass(audio_wav, analyze_duration, cfg)
-        transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
-        log.info(f"Cached first-pass transcript → {transcript_cache}")
+        audio_wav = cache / f"audio{limit_tag}.wav"
+        extract_audio(
+            meta.path, audio_wav,
+            sample_rate=cfg.audio.sample_rate,
+            codec=cfg.audio.codec,
+            overwrite=not use_cache,
+            duration_limit=source_limit,
+        )
+
+        transcript_cache = cache / f"first_pass_transcript{limit_tag}.json"
+        if use_cache and transcript_cache.exists():
+            log.info(f"Reusing cached first-pass transcript: {transcript_cache}")
+            transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
+        else:
+            transcript = transcribe_first_pass(audio_wav, analyze_duration, cfg)
+            transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
+            log.info(f"Cached first-pass transcript → {transcript_cache}")
+
+        selection_provider = build_provider(cfg.llm)
+        clips = analyze_for_reels(transcript, analyze_duration, selection_provider, cfg, debug_cache_dir=cache)
 
     # No language pinning: the 2nd pass auto-detects per clip, so a bilingual
     # episode transcribes each clip in its own language (forcing the episode
     # majority language garbles the odd-language-out clips).
 
-    provider = build_provider(cfg.llm)
-    clips = analyze_for_reels(transcript, analyze_duration, provider, cfg, debug_cache_dir=cache)
-    if not clips:
+    if not clips and not select_only:
         log.warning("LLM returned no clips — nothing to produce")
         return []
 
@@ -160,6 +201,40 @@ def run_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
     log.info(f"Output directory: {output_dir}")
 
+    if select_only:
+        selected = []
+        report = ["# Clip selection", "", f"Source: {input_path}", "",
+                  "Times are relative to the supplied video. Text comes from first-pass transcription.", ""]
+        for i, clip in enumerate(clips, 1):
+            words = [w for seg in transcript.segments for w in seg.words
+                     if w.start >= clip.start and w.end <= clip.end]
+            text = " ".join(w.text.strip() for w in words)
+            if not text:
+                text = " ".join(seg.text.strip() for seg in transcript.segments
+                                if seg.start >= clip.start and seg.end <= clip.end)
+            opening = " ".join(w.text.strip() for w in words if w.start < clip.start + 5)
+            ending = " ".join(w.text.strip() for w in words if w.end > clip.end - 7)
+            selected.append({"index": i, "start": clip.start, "end": clip.end,
+                             "duration": clip.duration, "title": clip.title,
+                             "reason": clip.reason, "hook_score": clip.hook_score,
+                             "opening_5_seconds": opening, "ending_7_seconds": ending,
+                             "transcript": text})
+            start = f"{int(clip.start // 60):02d}:{clip.start % 60:05.2f}"
+            end = f"{int(clip.end // 60):02d}:{clip.end % 60:05.2f}"
+            report.extend([f"## {i}. {clip.title}", "", f"{start}–{end} ({clip.duration:.1f}s)", "",
+                           f"Opening: {opening}", "", f"Ending: {ending}", "",
+                           f"Reason: {clip.reason}", "", f"Transcript: {text}", ""])
+        if not clips:
+            report.append("No clips selected.")
+        json_path = output_dir / "selection.json"
+        text_path = output_dir / "selection.md"
+        json_path.write_text(json.dumps({"source": str(input_path.resolve()), "clips": selected},
+                                        ensure_ascii=False, indent=2), encoding="utf-8")
+        text_path.write_text("\n".join(report), encoding="utf-8")
+        log.info(f"Selection complete: {len(clips)} clips; review → {text_path}")
+        return [json_path, text_path]
+
+    provider = build_provider(cfg.llm)
     music_lib = None
     if getattr(getattr(cfg, "music", None), "enabled", False):
         music_lib = load_library(Path(cfg.music.library_path))

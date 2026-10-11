@@ -44,35 +44,32 @@ transcribe:
     enabled: true
     transliterate: true          # romanize non-Latin scripts (Hindi, Urdu, Arabic, ...)
     fix_spelling: true           # correct obvious whisper mis-transcriptions
-    max_tokens_per_call: 2000    # safety cap
+    max_tokens_per_call: null    # null uses llm.max_tokens
 
 llm:
-  provider: claude_cli           # claude_cli | litellm
-  model: anthropic/claude-sonnet-4-5   # litellm format: '<vendor>/<model>'.
-                                 # ignored by claude_cli (it picks its own).
-                                 # Routing examples:
-                                 #   anthropic/claude-sonnet-4-5    (direct Anthropic API)
-                                 #   openai/gpt-5-mini              (direct OpenAI API)
-                                 #   ollama/llama3                  (local, needs api_base)
-                                 #   openai/anthropic/claude-sonnet-4.5
-                                 #     ↑ via OpenAI-compatible gateway (TokenRouter,
-                                 #       OpenRouter, ...). 'openai/' = speak OAI proto;
-                                 #       rest is the upstream model string.
-  max_tokens: 4096
-  claude_cli:
-    binary: claude               # path to CLI; "claude" uses $PATH
-    extra_args: []
-  litellm:
-    api_base: null               # set for gateways or local runtimes, e.g.
-                                 #   https://api.tokenrouter.com/v1
-                                 #   http://localhost:11434             (ollama)
-                                 # null → use vendor's default endpoint.
-    api_key_env: null            # null → litellm reads the env var matching the model
-                                 # prefix (anthropic/ → ANTHROPIC_API_KEY,
-                                 # openai/ → OPENAI_API_KEY, ...). Override when
-                                 # using a gateway: set to e.g. TOKENROUTER_API_KEY.
-    timeout_seconds: 900
-    num_retries: 2
+  endpoint: https://api.openai.com/v1
+  model: gpt-5-mini
+  api_key_env: OPENAI_API_KEY
+  max_tokens: 16384
+  retry_max_tokens: 32768        # one larger retry for a truncated response; set equal to max_tokens to disable
+  timeout_seconds: 900
+  num_retries: 2
+  routing:
+    only: []
+    order: []
+    allow_fallbacks: true
+    require_parameters: true
+
+content:
+  type: podcast
+  clips: 8
+  duration: [15, 90]
+
+output:
+  directory: outputs
+  captions: classic
+  music: false
+  intro_zoom: false
 
 analyze:
   min_clip_seconds: 15

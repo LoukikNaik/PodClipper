@@ -1,22 +1,12 @@
-"""LLM provider abstraction."""
-
-from __future__ import annotations
-
-from types import SimpleNamespace
+"""Shared LLM endpoint client factory."""
 
 from .base import LLMError, LLMProvider
+from .litellm_provider import LiteLLMProvider
 
 
-def build_provider(llm_cfg: SimpleNamespace) -> LLMProvider:
-    """Factory: instantiate the provider selected by `llm_cfg.provider`."""
-    provider_name = llm_cfg.provider
-    if provider_name == "claude_cli":
-        from .claude_cli import ClaudeCLIProvider
-        return ClaudeCLIProvider(llm_cfg.claude_cli)
-    if provider_name == "litellm":
-        from .litellm_provider import LiteLLMProvider
-        return LiteLLMProvider(llm_cfg.litellm, model=llm_cfg.model)
-    raise LLMError(f"unknown llm.provider: {provider_name!r}")
+def build_provider(llm_cfg) -> LLMProvider:
+    """Construct the endpoint client used by every LLM stage."""
+    return LiteLLMProvider(llm_cfg, model=llm_cfg.model)
 
 
 __all__ = ["LLMError", "LLMProvider", "build_provider"]

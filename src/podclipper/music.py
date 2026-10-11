@@ -97,7 +97,7 @@ def select_track(title: str, transcript: str, lib: dict,
             user_prompt=f"REEL TITLE: {title}\n\nTRANSCRIPT:\n{transcript}\n\n"
                         f"AVAILABLE TRACKS:\n{_track_menu(cands)}",
             system_prompt=load_prompt("music_selector.txt"),
-            max_tokens=400,
+            max_tokens=cfg.llm.max_tokens,
         )
         scores = _parse_scores(raw)
     except Exception as e:  # noqa: BLE001
