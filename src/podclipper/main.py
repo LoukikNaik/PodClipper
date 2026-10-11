@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlparse
+
+from podclipper.config import load_config, load_default_config
+from podclipper.logging_util import setup_logging
 
 
 def _load_dotenv(path: Path = Path(".env")) -> None:
@@ -32,23 +37,19 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
             os.environ[key] = value
 
 
-# Load .env BEFORE importing modules that read env vars (e.g. src.llm).
-_load_dotenv()
+def build_parser(show_advanced: bool = False) -> argparse.ArgumentParser:
+    def advanced(text: str) -> str:
+        return text if show_advanced else argparse.SUPPRESS
 
-from podclipper.config import load_config, load_default_config  # noqa: E402
-from podclipper.logging_util import setup_logging  # noqa: E402
-from podclipper.pipeline import run_pipeline, run_trailer_pipeline  # noqa: E402
-
-
-def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="podclipper",
-        description="Turn a long video into vertical 9:16 reels with smart cropping and subtitles.",
+        description="Turn a podcast into vertical reels with captions. First time? Run: podclipper init",
+        epilog="Local podclipper.yaml is loaded automatically. More options: podclipper --help-all",
     )
     p.add_argument("input", type=Path, help="Path to input video file")
     p.add_argument(
         "--mode", choices=["reels", "trailer"], default="reels",
-        help=(
+        help=advanced(
             "reels (default): produce N independent 9:16 reels covering "
             "different topics. "
             "trailer: produce ONE short trailer that splices 4-5 quotable "
@@ -58,83 +59,122 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "-c", "--config", type=Path, default=None,
-        help="Path to YAML config (default: packaged default.yaml)",
+        help="Config file (default: ./podclipper.yaml, then packaged defaults)",
     )
     p.add_argument(
         "-o", "--output-dir", type=Path, default=None,
-        help="Where to write final reels (overrides config.paths.output_dir)",
+        help="Where to save reels (default: outputs)",
     )
     p.add_argument(
         "--language", default=None,
-        help="Force Whisper language (e.g. 'en', 'hi'). Default: auto-detect",
+        help=advanced("Force Whisper language (e.g. 'en', 'hi'). Default: auto-detect"),
     )
     p.add_argument(
         "--whisper-engine", choices=["mlx", "faster"], default=None,
-        help="Transcription engine: mlx (default, Apple-Silicon GPU) or faster "
-             "(faster-whisper CPU/CUDA). Overrides cfg.transcribe.engine",
+        help=advanced("Transcription engine: faster (default, CPU/CUDA) or mlx (Apple-Silicon GPU)"),
     )
     p.add_argument(
-        "--llm-provider", choices=["claude_cli", "litellm"], default=None,
-        help="Override config.llm.provider",
-    )
-    p.add_argument(
-        "--max-clips", type=int, default=None,
+        "--clips", dest="max_clips", type=int, default=None,
         help="Cap the number of reels produced (after LLM analysis)",
     )
     p.add_argument(
         "--limit-minutes", type=float, default=None,
-        help=(
+        help=advanced(
             "Only consider the first N minutes of the source for clip "
             "selection (skips transcribing the rest). Overrides "
             "cfg.analyze.source_limit_seconds."
         ),
     )
     p.add_argument(
-        "--debug-crop", action="store_true",
-        help="Render auxiliary debug video with bbox + crop overlay",
-    )
-    p.add_argument(
-        "--debug-detect", action="store_true",
-        help=(
-            "Write debug_detect.mp4 and debug_mouth.mp4 per clip — "
-            "shows front/back face labels (green=front, orange=back), "
-            "selected primary (thick border), face bbox (cyan), "
-            "and mouth-openness boxes (green=talking, blue=silent)"
-        ),
-    )
-    p.add_argument(
         "--no-cache", action="store_true",
-        help="Ignore cached intermediate artifacts and rebuild from scratch",
+        help=advanced("Ignore cached intermediate artifacts and rebuild from scratch"),
     )
     p.add_argument(
-        "--keep-cache", action="store_true",
-        help="Keep cache dir after completion (default: preserved for resume)",
-    )
-    p.add_argument(
-        "--subtitle-style", choices=["classic", "pop"], default=None,
-        help="Override cfg.subtitles.style (classic karaoke vs pop 1-2-word style)",
+        "--captions", dest="subtitle_style", choices=["classic", "pop", "off"], default=None,
+        help="Caption style: classic, pop, or off (default: classic)",
     )
     p.add_argument(
         "--intro-zoom", action="store_true",
-        help="Start each reel punched-in on the subject and pull out to normal "
-             "framing over the first ~0.7s (sets cfg.crop.intro_zoom.enabled)",
+        help=advanced("Start each reel zoomed in, then pull out over the first ~0.7s"),
     )
     p.add_argument(
         "--music", action="store_true",
-        help="Lay a background-music bed under each reel, LLM-matched from the "
-             "curated library (sets cfg.music.enabled)",
-    )
-    p.add_argument(
-        "--comedy", action="store_true",
-        help="Single-performer mode for stand-up/comedy: never split into stacked "
-             "panels, and lock the crop on the performer while ignoring audience "
-             "members (sets cfg.crop.comedy_mode)",
+        help=advanced("Add background music matched from the curated library"),
     )
     p.add_argument(
         "-v", "--verbose", action="store_true",
         help="Enable DEBUG-level logging",
     )
+    p.add_argument("--type", choices=["podcast", "comedy"], default=None, help=advanced("Content type (default: podcast)"))
+    p.add_argument("--debug", action="store_true", help=advanced("Write detection and crop debug overlays"))
+    p.add_argument("--select-only", action="store_true", help="Save clip selection for review and stop before clip processing (reels mode)")
+    p.add_argument("--selection", type=Path, help="Render clips from a saved selection.json without selecting again (reels mode)")
     return p
+
+
+def _config_path(explicit: Path | None) -> Path | None:
+    if explicit is not None:
+        return explicit
+    local = Path("podclipper.yaml")
+    return local if local.exists() else None
+
+
+def _init_project() -> int:
+    """Create a small starter config and key file without replacing user files."""
+    import yaml
+
+    config_path = Path("podclipper.yaml")
+    try:
+        if config_path.exists():
+            cfg = load_config(config_path)
+            print("Keeping existing podclipper.yaml")
+        else:
+            cfg = load_default_config()
+            starter = {
+                "llm": {key: getattr(cfg.llm, key) for key in ("endpoint", "model", "api_key_env")},
+                "content": {"clips": cfg.content.clips},
+                "output": {"captions": cfg.output.captions},
+            }
+            with config_path.open("x") as handle:
+                handle.write(yaml.safe_dump(starter, sort_keys=False))
+            print("Created podclipper.yaml")
+        key = cfg.llm.api_key_env
+        env_path = Path(".env")
+        if env_path.exists():
+            print("Keeping existing .env")
+        elif key:
+            # Restrict access before writing, including on machines with a permissive umask.
+            fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                handle.write(f"# API key for the endpoint in podclipper.yaml. Keep this file private.\n{key}=\n")
+            print("Created .env")
+        if key:
+            print(f"\nSet {key} in .env (or your shell), then run:")
+        else:
+            print("\nRun:")
+        print('  podclipper "path/to/podcast.mp4"')
+        return 0
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"error: could not initialize project: {exc}", file=sys.stderr)
+        return 2
+
+
+def _check_setup(cfg) -> None:
+    """Fail before transcription when required tools or credentials are missing."""
+    missing = [name for name in ("ffmpeg", "ffprobe") if shutil.which(name) is None]
+    if missing:
+        raise ValueError(
+            f"Missing {', '.join(missing)}. Install FFmpeg and put it on PATH "
+            "(macOS: brew install ffmpeg; Ubuntu/Debian: sudo apt install ffmpeg)."
+        )
+    endpoint = urlparse(cfg.llm.endpoint)
+    if endpoint.scheme not in ("http", "https") or not endpoint.netloc:
+        raise ValueError("llm.endpoint must be an http:// or https:// URL in podclipper.yaml")
+    if not cfg.llm.model.strip():
+        raise ValueError("Set llm.model in podclipper.yaml")
+    key = cfg.llm.api_key_env
+    if key and not os.environ.get(key, "").strip():
+        raise ValueError(f"Missing {key}. Add {key}=your-api-key to .env or export it in your shell.")
 
 
 def apply_cli_overrides(cfg, args) -> None:
@@ -144,15 +184,12 @@ def apply_cli_overrides(cfg, args) -> None:
         cfg.transcribe.language = args.language
     if args.whisper_engine is not None:
         cfg.transcribe.engine = args.whisper_engine
-    if args.llm_provider is not None:
-        cfg.llm.provider = args.llm_provider
     if args.max_clips is not None:
         cfg.analyze.target_clips = args.max_clips
     if args.limit_minutes is not None:
         cfg.analyze.source_limit_seconds = args.limit_minutes * 60.0
-    if args.debug_crop:
+    if args.debug:
         cfg.crop.debug_overlay = True
-    if args.debug_detect:
         cfg.detect.debug_overlay = True
     if args.subtitle_style is not None:
         cfg.subtitles.style = args.subtitle_style
@@ -164,35 +201,80 @@ def apply_cli_overrides(cfg, args) -> None:
         if not hasattr(cfg, "music"):
             cfg.music = SimpleNamespace()
         cfg.music.enabled = True
-    if args.comedy:
-        cfg.crop.comedy_mode = True
+    if args.type is not None:
+        cfg.crop.comedy_mode = args.type == "comedy"
     if args.verbose:
         cfg.logging.level = "DEBUG"
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    import yaml
 
-    if not args.input.exists():
+    raw = sys.argv[1:] if argv is None else argv
+    if raw and raw[0] == "init":
+        argparse.ArgumentParser(prog="podclipper init", description="Create starter config and .env without overwriting existing files.").parse_args(raw[1:])
+        return _init_project()
+    if raw and raw[0] == "config":
+        from podclipper.config import ns_to_dict
+        parser = argparse.ArgumentParser(prog="podclipper config")
+        parser.add_argument("--resolved", action="store_true", required=True)
+        parser.add_argument("-c", "--config", type=Path)
+        args = parser.parse_args(raw[1:])
+        try:
+            config_path = _config_path(args.config)
+            cfg = load_config(config_path) if config_path else load_default_config()
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"error: could not load config: {exc}", file=sys.stderr)
+            return 2
+        print(yaml.safe_dump(ns_to_dict(cfg), sort_keys=False), end="")
+        return 0
+    show_advanced = "--help-all" in raw
+    args = build_parser(show_advanced=show_advanced).parse_args(
+        ["--help" if arg == "--help-all" else arg for arg in raw]
+    )
+
+    if args.select_only and args.mode != "reels":
+        print("error: --select-only requires --mode reels", file=sys.stderr)
+        return 2
+    if args.selection is not None and (args.mode != "reels" or args.select_only):
+        print("error: --selection requires reels mode without --select-only", file=sys.stderr)
+        return 2
+    if args.selection is not None and not args.selection.is_file():
+        print(f"error: saved selection not found: {args.selection}", file=sys.stderr)
+        return 2
+
+    if not args.input.is_file():
         print(f"error: input video not found: {args.input}", file=sys.stderr)
         return 2
 
-    if args.config is None:
-        cfg = load_default_config()
-    elif not args.config.exists():
-        print(f"error: config file not found: {args.config}", file=sys.stderr)
+    config_path = _config_path(args.config)
+    if config_path is not None and not config_path.is_file():
+        print(f"error: config file not found: {config_path}", file=sys.stderr)
         return 2
-    else:
-        cfg = load_config(args.config)
-    apply_cli_overrides(cfg, args)
+    try:
+        cfg = load_config(config_path) if config_path else load_default_config()
+        apply_cli_overrides(cfg, args)
+        if cfg.analyze.target_clips < 1:
+            raise ValueError("--clips must be at least 1")
+        if args.limit_minutes is not None and args.limit_minutes <= 0:
+            raise ValueError("--limit-minutes must be greater than zero")
+        _load_dotenv()
+        if config_path is not None:
+            _load_dotenv(config_path.resolve().parent / ".env")
+        _check_setup(cfg)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     log = setup_logging(cfg.logging.level)
     log.info(f"Input: {args.input}")
     log.info(f"Output dir: {cfg.paths.output_dir}")
-    log.info(f"LLM provider: {cfg.llm.provider}")
+    log.info(f"LLM model: {cfg.llm.model}")
+    log.info(f"Config: {config_path if config_path else 'packaged defaults'}")
 
     try:
         if args.mode == "trailer":
+            from podclipper.pipeline import run_trailer_pipeline
             log.info("Mode: trailer (splice quotable sentences into one reel)")
             run_trailer_pipeline(
                 input_path=args.input,
@@ -200,17 +282,29 @@ def main(argv: list[str] | None = None) -> int:
                 use_cache=not args.no_cache,
             )
         else:
+            from podclipper.pipeline import run_pipeline
             log.info("Mode: reels (independent 9:16 clips)")
-            run_pipeline(
+            produced = run_pipeline(
                 input_path=args.input,
                 cfg=cfg,
                 use_cache=not args.no_cache,
+                select_only=args.select_only,
+                selection_path=args.selection,
             )
+            if not produced:
+                print("No reels were exported. See the log for rejected clips or processing failures.", file=sys.stderr)
+                return 1
+            print("\nSelection saved:" if args.select_only else f"\nSaved {len(produced)} reel(s):")
+            for path in produced:
+                print(f"  {path}")
     except KeyboardInterrupt:
         log.warning("Interrupted by user.")
         return 130
     except Exception as exc:  # noqa: BLE001
-        log.exception(f"Pipeline failed: {exc}")
+        if args.verbose:
+            log.exception(f"Pipeline failed: {exc}")
+        else:
+            log.error(f"Pipeline failed: {exc}. Use --verbose for details.")
         return 1
 
     return 0

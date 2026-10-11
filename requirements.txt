@@ -13,3 +13,5 @@ pyannote.audio>=3.1        # requires HF_TOKEN — accept terms at
                            # https://huggingface.co/pyannote/speaker-diarization-3.1
 mediapipe>=0.10            # face landmarks for mouth-motion speaker linking
 torch>=2.0                 # pulled in by pyannote
+
+tenacity>=9.0

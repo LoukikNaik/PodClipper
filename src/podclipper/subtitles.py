@@ -401,6 +401,11 @@ def burn_subtitles(
 ) -> Path:
     """Dispatch to the classic or pop subtitle renderer based on cfg.subtitles.style."""
     style = getattr(cfg.subtitles, "style", "classic")
+    if style == "off":
+        import shutil
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(video_path, out_path)
+        return out_path
     if style == "pop":
         return _burn_pop(video_path, words, out_path, cfg, title)
     return _burn_classic(video_path, words, out_path, cfg, title)

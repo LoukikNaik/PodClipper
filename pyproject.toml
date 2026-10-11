@@ -36,6 +36,7 @@ dependencies = [
     "numpy>=1.26",
     "Pillow>=10.0",
     "litellm>=1.50",
+    "tenacity>=9.0",
     "anthropic>=0.42.0",
     "mediapipe>=0.10",
     "pyyaml>=6.0",

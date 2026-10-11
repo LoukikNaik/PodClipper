@@ -196,12 +196,10 @@ def test_parser_defaults_match_documented_pipeline_defaults() -> None:
     assert args.config is None
     assert args.output_dir is None
     assert args.language is None
-    assert args.llm_provider is None
+    assert args.type is None
     assert args.max_clips is None
-    assert args.debug_crop is False
-    assert args.debug_detect is False
+    assert args.debug is False
     assert args.no_cache is False
-    assert args.keep_cache is False
     assert args.verbose is False
 
 
@@ -216,27 +214,13 @@ def test_parser_mode_choices_are_reels_and_trailer_only() -> None:
         parser.parse_args(["video.mp4", "--mode", "invalid_mode"])
 
 
-def test_parser_llm_provider_choices_are_claude_cli_and_litellm() -> None:
-    """`--llm-provider` choices are {claude_cli, litellm} after Phase 1."""
-    parser = build_parser()
-
-    parser.parse_args(["video.mp4", "--llm-provider", "claude_cli"])
-    parser.parse_args(["video.mp4", "--llm-provider", "litellm"])
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["video.mp4", "--llm-provider", "anthropic_api"])
-
-
-# --------------------------------------------------------------------------- #
-# apply_cli_overrides: flag → cfg.<path> mappings
-# --------------------------------------------------------------------------- #
 
 def _make_minimal_cfg() -> SimpleNamespace:
     """Build the minimum cfg shape apply_cli_overrides reads/writes."""
     return SimpleNamespace(
         paths=SimpleNamespace(output_dir="outputs"),
         transcribe=SimpleNamespace(language=None),
-        llm=SimpleNamespace(provider="claude_cli"),
+        llm=SimpleNamespace(model="example"),
         analyze=SimpleNamespace(target_clips=10),
         crop=SimpleNamespace(debug_overlay=False),
         detect=SimpleNamespace(debug_overlay=False),
@@ -250,11 +234,10 @@ def _make_default_args() -> SimpleNamespace:
         output_dir=None,
         language=None,
         whisper_engine=None,
-        llm_provider=None,
+        type=None,
         max_clips=None,
         limit_minutes=None,
-        debug_crop=False,
-        debug_detect=False,
+        debug=False,
         subtitle_style=None,
         intro_zoom=False,
         music=False,
@@ -272,7 +255,7 @@ def test_apply_cli_overrides_is_noop_when_all_flags_unset() -> None:
 
     assert cfg.paths.output_dir == "outputs"
     assert cfg.transcribe.language is None
-    assert cfg.llm.provider == "claude_cli"
+    assert cfg.llm.model == "example"
     assert cfg.analyze.target_clips == 10
     assert cfg.crop.debug_overlay is False
     assert cfg.detect.debug_overlay is False
@@ -302,19 +285,9 @@ def test_apply_cli_overrides_sets_transcribe_language() -> None:
     assert cfg.transcribe.language == "hi"
 
 
-def test_apply_cli_overrides_sets_llm_provider() -> None:
-    """`--llm-provider litellm` → `cfg.llm.provider = 'litellm'`."""
-    cfg = _make_minimal_cfg()
-    args = _make_default_args()
-    args.llm_provider = "litellm"
-
-    apply_cli_overrides(cfg, args)
-
-    assert cfg.llm.provider == "litellm"
-
 
 def test_apply_cli_overrides_sets_max_clips_via_analyze_target_clips() -> None:
-    """`--max-clips 5` → `cfg.analyze.target_clips = 5` (the CLI flag name differs from the cfg key)."""
+    """`--clips 5` → `cfg.analyze.target_clips = 5` (the CLI flag name differs from the cfg key)."""
     cfg = _make_minimal_cfg()
     args = _make_default_args()
     args.max_clips = 5
@@ -328,7 +301,7 @@ def test_apply_cli_overrides_sets_crop_debug_overlay_when_debug_crop_flag_true()
     """`--debug-crop` → `cfg.crop.debug_overlay = True`."""
     cfg = _make_minimal_cfg()
     args = _make_default_args()
-    args.debug_crop = True
+    args.debug = True
 
     apply_cli_overrides(cfg, args)
 
@@ -336,10 +309,10 @@ def test_apply_cli_overrides_sets_crop_debug_overlay_when_debug_crop_flag_true()
 
 
 def test_apply_cli_overrides_sets_comedy_mode_when_comedy_flag_true() -> None:
-    """`--comedy` → `cfg.crop.comedy_mode = True`."""
+    """`--type comedy` → `cfg.crop.comedy_mode = True`."""
     cfg = _make_minimal_cfg()
     args = _make_default_args()
-    args.comedy = True
+    args.type = "comedy"
 
     apply_cli_overrides(cfg, args)
 
@@ -350,7 +323,7 @@ def test_apply_cli_overrides_sets_detect_debug_overlay_when_debug_detect_flag_tr
     """`--debug-detect` → `cfg.detect.debug_overlay = True`."""
     cfg = _make_minimal_cfg()
     args = _make_default_args()
-    args.debug_detect = True
+    args.debug = True
 
     apply_cli_overrides(cfg, args)
 
@@ -358,7 +331,7 @@ def test_apply_cli_overrides_sets_detect_debug_overlay_when_debug_detect_flag_tr
 
 
 def test_apply_cli_overrides_leaves_subtitles_style_when_flag_omitted() -> None:
-    """No `--subtitle-style` → `cfg.subtitles.style` is not touched."""
+    """No `--captions` → `cfg.subtitles.style` is not touched."""
     cfg = _make_minimal_cfg()
     cfg.subtitles = SimpleNamespace(style="classic")
     args = _make_default_args()  # subtitle_style=None
@@ -372,11 +345,11 @@ def test_build_parser_rejects_unknown_subtitle_style() -> None:
     """argparse `choices=` rejects values outside {classic, pop}."""
     parser = build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["video.mp4", "--subtitle-style", "neon"])
+        parser.parse_args(["video.mp4", "--captions", "neon"])
 
 
 def test_apply_cli_overrides_sets_subtitles_style_when_flag_pop() -> None:
-    """`--subtitle-style pop` → `cfg.subtitles.style = 'pop'`."""
+    """`--captions pop` → `cfg.subtitles.style = 'pop'`."""
     cfg = _make_minimal_cfg()
     cfg.subtitles = SimpleNamespace(style="classic")
     args = _make_default_args()
@@ -431,24 +404,30 @@ def test_main_returns_2_when_config_file_does_not_exist(
 
 
 def test_main_with_no_config_flag_dispatches_to_load_default_config(
-    tmp_path: Path, mocker,
+    tmp_path: Path, mocker, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No -c flag → main() calls load_default_config() (NOT load_config) and runs the pipeline.
-
-    Guards the install-time happy path: `podclipper video.mp4` (no -c) must
-    use the in-package default.yaml via importlib.resources, not look for a
-    file on disk. Without this test, an inverted condition or a missing
-    import would only surface at user runtime.
-    """
+    """Without -c or a local config, use packaged defaults and run the pipeline."""
+    monkeypatch.chdir(tmp_path)
     fake_input = tmp_path / "fake.mp4"
     fake_input.write_text("not a real video, but exists")
     spy_default = mocker.spy(__import__("podclipper.main", fromlist=["load_default_config"]), "load_default_config")
     spy_disk = mocker.spy(__import__("podclipper.main", fromlist=["load_config"]), "load_config")
-    mock_run = mocker.patch("podclipper.main.run_pipeline")
+    mocker.patch("podclipper.main._check_setup")
+    mock_run = mocker.patch("podclipper.pipeline.run_pipeline", return_value=[tmp_path / "reel.mp4"])
 
     rc = main([str(fake_input)])
 
     assert rc == 0
-    assert spy_default.call_count == 1, "load_default_config() must be called when -c is omitted"
-    assert spy_disk.call_count == 0, "load_config() (filesystem path) must NOT be called when -c is omitted"
+    assert spy_default.call_count == 1, "Use defaults when no explicit or local config exists"
+    assert spy_disk.call_count == 0, "No config file exists in this working directory"
     assert mock_run.call_count == 1, "run_pipeline must still be invoked with the packaged cfg"
+
+
+def test_config_resolved_command_reads_partial_overrides(tmp_path, capsys):
+    import yaml
+    path = tmp_path / "config.yaml"
+    path.write_text("content:\n  clips: 3\n")
+    assert main(["config", "--resolved", "-c", str(path)]) == 0
+    raw = yaml.safe_load(capsys.readouterr().out)
+    assert raw["analyze"]["target_clips"] == 3
+    assert raw["crop"]["mode"] == "auto"

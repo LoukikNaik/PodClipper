@@ -12,8 +12,9 @@ audio:
   chunk_overlap_seconds: 10      # overlap for boundary safety
 
 transcribe:
-  engine: mlx                    # mlx (default, Apple-Silicon GPU, best quality) |
-                                 # faster (faster-whisper CPU/CUDA). CLI: --whisper-engine
+  engine: faster                 # faster (default, faster-whisper CPU/CUDA — best
+                                 # word recall on fast code-switched Hindi/English) |
+                                 # mlx (Apple-Silicon GPU). CLI: --whisper-engine
   language: null                 # null = auto-detect per clip (no episode-level pinning)
   retry_on_garble: true          # if auto-detect returns a suspiciously sparse transcript
                                  # (accented-English-heard-as-Hindi drops most words),
@@ -43,35 +44,32 @@ transcribe:
     enabled: true
     transliterate: true          # romanize non-Latin scripts (Hindi, Urdu, Arabic, ...)
     fix_spelling: true           # correct obvious whisper mis-transcriptions
-    max_tokens_per_call: 2000    # safety cap
+    max_tokens_per_call: null    # null uses llm.max_tokens
 
 llm:
-  provider: claude_cli           # claude_cli | litellm
-  model: anthropic/claude-sonnet-4-5   # litellm format: '<vendor>/<model>'.
-                                 # ignored by claude_cli (it picks its own).
-                                 # Routing examples:
-                                 #   anthropic/claude-sonnet-4-5    (direct Anthropic API)
-                                 #   openai/gpt-5-mini              (direct OpenAI API)
-                                 #   ollama/llama3                  (local, needs api_base)
-                                 #   openai/anthropic/claude-sonnet-4.5
-                                 #     ↑ via OpenAI-compatible gateway (TokenRouter,
-                                 #       OpenRouter, ...). 'openai/' = speak OAI proto;
-                                 #       rest is the upstream model string.
-  max_tokens: 4096
-  claude_cli:
-    binary: claude               # path to CLI; "claude" uses $PATH
-    extra_args: []
-  litellm:
-    api_base: null               # set for gateways or local runtimes, e.g.
-                                 #   https://api.tokenrouter.com/v1
-                                 #   http://localhost:11434             (ollama)
-                                 # null → use vendor's default endpoint.
-    api_key_env: null            # null → litellm reads the env var matching the model
-                                 # prefix (anthropic/ → ANTHROPIC_API_KEY,
-                                 # openai/ → OPENAI_API_KEY, ...). Override when
-                                 # using a gateway: set to e.g. TOKENROUTER_API_KEY.
-    timeout_seconds: 900
-    num_retries: 2
+  endpoint: https://api.openai.com/v1
+  model: gpt-5-mini
+  api_key_env: OPENAI_API_KEY
+  max_tokens: 16384
+  retry_max_tokens: 32768        # one larger retry for a truncated response; set equal to max_tokens to disable
+  timeout_seconds: 900
+  num_retries: 2
+  routing:
+    only: []
+    order: []
+    allow_fallbacks: true
+    require_parameters: true
+
+content:
+  type: podcast
+  clips: 8
+  duration: [15, 90]
+
+output:
+  directory: outputs
+  captions: classic
+  music: false
+  intro_zoom: false
 
 analyze:
   min_clip_seconds: 15
@@ -245,12 +243,12 @@ trailer:
 
 music:                           # opt-in background music from a curated library.
                                  # A separate LLM call scores every track for the
-                                 # reel's vibe and picks the highest (falls back to
-                                 # random below min_score). CLI: --music
+                                 # reel's vibe and picks the highest; if none clears
+                                 # min_score the reel gets NO music. CLI: --music
   enabled: false
   library_path: music/library.json
-  min_score: 5.0                 # best track must score >= this (0..10) to be used,
-                                 # else fall back to a random pick
+  min_score: 5.0                 # best section must score >= this (0..10) to be used;
+                                 # below it → no music (never a random/forced pick)
   gain: 0.32                     # music bed level (0..1); kept well under speech
   duck_ratio: 3.0                # sidechain compression ratio (higher = music dips
                                  # more when the speaker talks)

@@ -26,7 +26,7 @@ def test_init_sets_name_attribute_to_litellm_and_stores_model() -> None:
     provider = LiteLLMProvider(SimpleNamespace(), model="anthropic/claude-sonnet-4-5")
 
     assert provider.name == "litellm"
-    assert provider.model == "anthropic/claude-sonnet-4-5"
+    assert provider.model == "openai/anthropic/claude-sonnet-4-5"
 
 
 # --------------------------------------------------------------------------- #
@@ -170,7 +170,7 @@ def test_complete_forwards_api_base_when_set_in_cfg(mocker) -> None:
 
     mock_completion = mocker.patch("litellm.completion")
     mock_completion.return_value = _make_litellm_response(mocker, "ok")
-    cfg = SimpleNamespace(api_base="http://localhost:11434")
+    cfg = SimpleNamespace(endpoint="http://localhost:11434")
     provider = LiteLLMProvider(cfg, model="ollama/llama3")
 
     provider.complete("hi")
@@ -264,3 +264,31 @@ def test_init_raises_litellm_internal_logger_to_warning() -> None:
     LiteLLMProvider(SimpleNamespace(), model="anthropic/x")
 
     assert logging.getLogger("LiteLLM").level >= logging.WARNING
+
+
+def test_plain_endpoint_model_routes_through_openai_protocol(mocker, monkeypatch):
+    from podclipper.llm.litellm_provider import LiteLLMProvider
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    completion = mocker.patch("litellm.completion")
+    completion.return_value = _make_litellm_response(mocker, "ok")
+    provider = LiteLLMProvider(SimpleNamespace(endpoint="https://example.test/v1",
+                                              api_key_env="LLM_API_KEY"), model="example")
+    assert provider.complete("hi") == "ok"
+    assert completion.call_args.kwargs["model"] == "openai/example"
+    assert completion.call_args.kwargs["api_base"] == "https://example.test/v1"
+    assert completion.call_args.kwargs["api_key"] == "test-key"
+
+
+def test_provider_routing_forwarded_without_reasoning_override(mocker):
+    from podclipper.config import load_config
+    from podclipper.llm import build_provider
+    completion = mocker.patch("litellm.completion")
+    completion.return_value = _make_litellm_response(mocker, "Hi")
+    provider = build_provider(load_config("podclipper.yaml").llm)
+    assert provider.complete("Hi") == "Hi"
+    params = completion.call_args.kwargs
+    assert params["extra_body"] == {"provider": {
+        "only": ["deepinfra"], "allow_fallbacks": False, "require_parameters": True,
+    }}
+    assert "reasoning" not in params["extra_body"]
+    assert "reasoning_effort" not in params

@@ -21,15 +21,16 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podclipper.config import load_config
 from podclipper.llm import LLMError, build_provider
 from podclipper.logging_util import setup_logging
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-CACHE_ROOT = SCRIPT_DIR / ".cache"
+CACHE_ROOT = REPO_ROOT / ".cache"
 SESSION_PATH = CACHE_ROOT / "instagrapi_session.json"
 MAX_HASHTAGS = 15
 INSTAGRAM_CAPTION_LIMIT = 2200
@@ -139,7 +140,7 @@ def generate_caption(reel_path: Path, cfg, log) -> str:
         transcript = ""
     else:
         transcript = _transcript_from_words(words_path)
-        log.info(f"transcript loaded from {words_path.relative_to(SCRIPT_DIR)} ({len(transcript)} chars)")
+        log.info(f"transcript loaded from {words_path.relative_to(REPO_ROOT)} ({len(transcript)} chars)")
 
     user_prompt = (
         f"Title: {title}\n"
@@ -204,7 +205,7 @@ def _login(log):
             cl.load_settings(SESSION_PATH)
             cl.login(user, pw)
             cl.get_timeline_feed()  # cheap auth check
-            log.info(f"reused session: {SESSION_PATH.relative_to(SCRIPT_DIR)}")
+            log.info(f"reused session: {SESSION_PATH.relative_to(REPO_ROOT)}")
             return cl
         except Exception as e:
             log.warning(f"saved session invalid ({e}); fresh login")
@@ -212,7 +213,7 @@ def _login(log):
 
     cl.login(user, pw)
     cl.dump_settings(SESSION_PATH)
-    log.info(f"fresh login complete; session saved to {SESSION_PATH.relative_to(SCRIPT_DIR)}")
+    log.info(f"fresh login complete; session saved to {SESSION_PATH.relative_to(REPO_ROOT)}")
     return cl
 
 
@@ -221,7 +222,8 @@ def main() -> int:
         description="Post a reel via instagrapi (Instagram's private mobile API)."
     )
     ap.add_argument("reel", type=Path)
-    ap.add_argument("-c", "--config", type=Path, default=Path("config/default.yaml"))
+    ap.add_argument("-c", "--config", type=Path,
+                    default=REPO_ROOT / "src/podclipper/config/default.yaml")
     ap.add_argument("--caption", default=None,
                     help="Skip the LLM and post this caption verbatim")
     ap.add_argument("--dry-run", action="store_true",
