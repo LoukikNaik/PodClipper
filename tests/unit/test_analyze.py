@@ -16,7 +16,7 @@ Behaviors locked:
   - `_snap_to_segment_boundaries`   — snap (start, end) to nearest transcript
                                       segment boundary within tolerance.
   - `_coerce_clip(raw, ...)`        — raw dict → Clip, drops invalid entries.
-  - `_transcript_excerpt`           — extract clip-range text, trim to max chars.
+  - `_transcript_excerpt`           — extract the complete text inside a clip.
 """
 
 from __future__ import annotations
@@ -246,8 +246,8 @@ def test_coerce_clip_truncates_reason_to_300_characters() -> None:
 # _transcript_excerpt
 # --------------------------------------------------------------------------- #
 
-def test_transcript_excerpt_returns_segments_overlapping_clip_range() -> None:
-    """Only segments overlapping [clip.start, clip.end] are included."""
+def test_transcript_excerpt_returns_segments_inside_clip_range() -> None:
+    """Only fully contained segments without word timings are included."""
     transcript = Transcript(language="en", segments=[
         TranscriptSegment(start=0, end=10, text="before", words=[]),
         TranscriptSegment(start=15, end=25, text="inside", words=[]),
@@ -260,8 +260,8 @@ def test_transcript_excerpt_returns_segments_overlapping_clip_range() -> None:
     assert excerpt == "inside"
 
 
-def test_transcript_excerpt_joins_multiple_overlapping_segments_with_space() -> None:
-    """Multiple overlapping segments joined with single space."""
+def test_transcript_excerpt_joins_multiple_contained_segments_with_space() -> None:
+    """Multiple contained segments are joined with a single space."""
     transcript = Transcript(language="en", segments=[
         TranscriptSegment(start=10, end=20, text="first", words=[]),
         TranscriptSegment(start=20, end=30, text="second", words=[]),
@@ -273,15 +273,35 @@ def test_transcript_excerpt_joins_multiple_overlapping_segments_with_space() -> 
     assert excerpt == "first second"
 
 
-def test_transcript_excerpt_truncates_at_max_chars_and_appends_ellipsis() -> None:
-    """Excerpt longer than max_chars → rsplit at last space, append ' …'."""
-    long_text = "word " * 1000  # 5000 chars
+def test_transcript_excerpt_preserves_the_complete_clip_text() -> None:
+    """Long excerpts retain the full evidence used to review a clip."""
+    long_text = "word " * 1000
     transcript = Transcript(language="en", segments=[
         TranscriptSegment(start=0, end=100, text=long_text, words=[]),
     ])
     clip = Clip(start=0, end=100, title="t", reason="r")
 
-    excerpt = _transcript_excerpt(transcript, clip, max_chars=50)
+    excerpt = _transcript_excerpt(transcript, clip)
 
-    assert excerpt.endswith(" …")
-    assert len(excerpt) <= 50 + 3  # 50 chars + " …" but rsplit may shorten further
+    assert excerpt == long_text.strip()
+
+
+def test_transcript_excerpt_excludes_words_crossing_clip_boundaries() -> None:
+    """Word timings select only words entirely inside the exact cut."""
+    transcript = Transcript(language="en", segments=[
+        TranscriptSegment(start=0, end=10, text="outside crossing inside crossing outside", words=[
+            Word(0, 1, "outside"), Word(1, 3, "crossing"),
+            Word(3, 7, "inside"), Word(7, 9, "crossing"), Word(9, 10, "outside"),
+        ]),
+    ])
+
+    assert _transcript_excerpt(transcript, Clip(2, 8, "t", "r")) == "inside"
+
+
+def test_transcript_excerpt_excludes_partial_segments_without_word_timings() -> None:
+    """A partial segment cannot provide exact evidence without word timings."""
+    transcript = Transcript(language="en", segments=[
+        TranscriptSegment(start=0, end=10, text="partially outside", words=[]),
+    ])
+
+    assert _transcript_excerpt(transcript, Clip(2, 8, "t", "r")) == ""

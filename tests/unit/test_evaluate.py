@@ -235,7 +235,10 @@ def _mock_provider(mocker, raw_response: str):
 
 
 def _eval_cfg(enabled: bool = True) -> SimpleNamespace:
-    return SimpleNamespace(evaluate=SimpleNamespace(enabled=enabled))
+    return SimpleNamespace(
+        evaluate=SimpleNamespace(enabled=enabled),
+        llm=SimpleNamespace(max_tokens=32768),
+    )
 
 
 def test_evaluate_content_returns_review_default_when_evaluation_disabled(mocker) -> None:
@@ -309,6 +312,7 @@ def test_evaluate_content_extracts_scores_and_verdict_from_valid_llm_response(mo
     assert cs.verdict == "publish"
     assert cs.overall == 4.3
     assert cs.feedback == "ship it"
+    assert provider.complete.call_args.kwargs["max_tokens"] == cfg.llm.max_tokens
 
 
 def test_evaluate_content_recomputes_verdict_when_llm_returns_invalid_verdict(mocker) -> None:

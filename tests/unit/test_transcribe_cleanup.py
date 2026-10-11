@@ -27,7 +27,9 @@ from podclipper.types import Word
 # --------------------------------------------------------------------------- #
 
 def test_extract_json_array_parses_raw_array() -> None:
-    assert _extract_json_array('[{"i": 0, "w": "hi"}]') == [{"i": 0, "w": "hi"}]
+    assert _extract_json_array('[{"source_indices": [0], "words": ["hi"]}]') == [
+        {"source_indices": [0], "words": ["hi"]},
+    ]
 
 
 def test_extract_json_array_strips_json_code_fence() -> None:
@@ -49,8 +51,9 @@ def _provider_returning(mocker, raw_response: str):
     return p
 
 
-def _cfg(enabled: bool = True, max_tokens: int = 4096) -> SimpleNamespace:
+def _cfg(enabled: bool = True, max_tokens: int | None = 4096) -> SimpleNamespace:
     return SimpleNamespace(
+        llm=SimpleNamespace(max_tokens=32768),
         transcribe=SimpleNamespace(
             cleanup=SimpleNamespace(enabled=enabled, max_tokens_per_call=max_tokens),
         ),
@@ -118,9 +121,11 @@ def test_cleanup_words_returns_original_when_response_is_unparseable(mocker) -> 
     assert out is words
 
 
-def test_cleanup_words_returns_original_when_response_count_mismatches(mocker) -> None:
-    """LLM returned wrong number of tokens → keep original (safer than re-aligning)."""
-    provider = _provider_returning(mocker, json.dumps([{"i": 0, "w": "only_one"}]))
+def test_cleanup_words_returns_original_when_source_indices_are_missing(mocker) -> None:
+    """Every original word must be covered by the correction mapping."""
+    provider = _provider_returning(mocker, json.dumps([
+        {"source_indices": [0], "words": ["only_one"]},
+    ]))
     words = _words("hello", "world")  # 2 words
 
     out = cleanup_words(words, provider, _cfg())
@@ -128,9 +133,11 @@ def test_cleanup_words_returns_original_when_response_count_mismatches(mocker) -
     assert out is words
 
 
-def test_cleanup_words_returns_original_when_item_missing_w_key(mocker) -> None:
-    """Malformed item (no 'w' field) → keep original."""
-    provider = _provider_returning(mocker, json.dumps([{"i": 0}, {"i": 1, "w": "world"}]))
+def test_cleanup_words_returns_original_when_corrected_words_are_missing(mocker) -> None:
+    """Each correction must supply its replacement words."""
+    provider = _provider_returning(mocker, json.dumps([
+        {"source_indices": [0]}, {"source_indices": [1], "words": ["world"]},
+    ]))
     words = _words("hello", "world")
 
     out = cleanup_words(words, provider, _cfg())
@@ -145,8 +152,8 @@ def test_cleanup_words_returns_original_when_item_missing_w_key(mocker) -> None:
 def test_cleanup_words_returns_new_words_with_updated_text_when_llm_succeeds(mocker) -> None:
     """Valid response → new Word objects with updated text, original timings preserved."""
     provider = _provider_returning(mocker, json.dumps([
-        {"i": 0, "w": "Hello"},          # capitalized
-        {"i": 1, "w": "namaste"},        # transliterated from नमस्ते
+        {"source_indices": [0], "words": ["Hello"]},
+        {"source_indices": [1], "words": ["namaste"]},
     ]))
     words = [
         Word(start=0.0, end=0.5, text="hello"),
@@ -156,16 +163,73 @@ def test_cleanup_words_returns_new_words_with_updated_text_when_llm_succeeds(moc
     out = cleanup_words(words, provider, _cfg())
 
     assert [w.text for w in out] == ["Hello", "namaste"]
-    # Timings preserved
+    assert out is not words
+    assert [w.text for w in words] == ["hello", "नमस्ते"]
     assert out[0].start == 0.0 and out[0].end == 0.5
     assert out[1].start == 0.5 and out[1].end == 1.0
 
 
 def test_cleanup_words_preserves_word_confidence_field(mocker) -> None:
     """Original Word.confidence carries through into the rewritten Word."""
-    provider = _provider_returning(mocker, json.dumps([{"i": 0, "w": "fixed"}]))
+    provider = _provider_returning(mocker, json.dumps([
+        {"source_indices": [0], "words": ["fixed"]},
+    ]))
     words = [Word(start=0.0, end=0.5, text="brokn", confidence=0.42)]
 
     out = cleanup_words(words, provider, _cfg())
 
     assert out[0].confidence == 0.42
+    assert out[0].text == "fixed"
+
+
+def test_cleanup_words_merges_adjacent_tokens_with_their_original_time_span(mocker) -> None:
+    """Merged words span both source tokens and retain the lower confidence."""
+    provider = _provider_returning(mocker, json.dumps([
+        {"source_indices": [0, 1], "words": ["podcast"]},
+        {"source_indices": [2], "words": ["today"]},
+    ]))
+    words = [Word(0, 0.4, "pod", 0.9), Word(0.5, 1, "cast", 0.7), Word(1.2, 2, "today", 0.8)]
+
+    out = cleanup_words(words, provider, _cfg())
+
+    assert out == [Word(0, 1, "podcast", 0.7), Word(1.2, 2, "today", 0.8)]
+
+
+def test_cleanup_words_splits_a_token_within_its_original_time_span(mocker) -> None:
+    """Splits share the original duration in proportion to corrected word lengths."""
+    provider = _provider_returning(mocker, json.dumps([
+        {"source_indices": [0], "words": ["a", "lot!"]},
+    ]))
+
+    out = cleanup_words([Word(1, 2, "alot!", 0.6)], provider, _cfg())
+
+    assert out == [Word(1, 1.2, "a", 0.6), Word(1.2, 2, "lot!", 0.6)]
+
+
+@pytest.mark.parametrize("corrections", [
+    [{"source_indices": [1], "words": ["world"]}, {"source_indices": [0], "words": ["hello"]}],
+    [{"source_indices": [0], "words": ["hello"]}, {"source_indices": [0], "words": ["again"]}],
+    [{"source_indices": [0, 2], "words": ["combined"]}],
+    [{"source_indices": [0, 1, 2], "words": ["combined"]}],
+    [{"source_indices": [True, 1], "words": ["combined"]}],
+    [{"source_indices": [0, 1], "words": [""]}],
+    [{"source_indices": [0, 1], "words": ["two words"]}],
+])
+def test_cleanup_words_rejects_invalid_mappings(mocker, corrections) -> None:
+    """Invalid mappings preserve the original words and timings."""
+    provider = _provider_returning(mocker, json.dumps(corrections))
+    words = _words("hello", "world")
+
+    assert cleanup_words(words, provider, _cfg()) is words
+
+
+def test_cleanup_words_uses_shared_token_budget_when_no_cleanup_override(mocker) -> None:
+    """The shared LLM budget applies unless cleanup explicitly overrides it."""
+    provider = _provider_returning(mocker, json.dumps([
+        {"source_indices": [0], "words": ["hello"]},
+    ]))
+    cfg = _cfg(max_tokens=None)
+
+    cleanup_words(_words("hello"), provider, cfg)
+
+    assert provider.complete.call_args.kwargs["max_tokens"] == 32768
