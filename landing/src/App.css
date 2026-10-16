@@ -210,6 +210,12 @@ body {
   transition: color 0.15s;
 }
 .nav-text-link:hover { color: var(--text); }
+.nav-install {
+  color: var(--blue);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-decoration: none;
+}
 .nav-gh {
   display: flex;
   align-items: center;
@@ -319,6 +325,129 @@ body {
 @keyframes up {
   from { opacity: 0; transform: translateY(18px); }
   to   { opacity: 1; transform: none; }
+}
+
+.hero-project-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.hero-project-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-2);
+  text-decoration: none;
+}
+.hero-project-links a:hover { color: var(--blue); text-decoration: underline; }
+
+.install-section {
+  padding: 5rem 0;
+  background: var(--surface);
+  scroll-margin-top: 75px;
+}
+.install-head { max-width: 760px; margin-bottom: 2.5rem; }
+.install-head .lead { margin: 0; max-width: 620px; }
+.install-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 2rem;
+}
+.install-option { min-width: 0; }
+.install-option h3, .install-step h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+.install-option h3 span {
+  display: inline-block;
+  color: var(--blue);
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-left: 0.5rem;
+}
+.install-option p, .install-step p, .install-note {
+  font-size: 0.875rem;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.install-section a { color: var(--blue); text-underline-offset: 3px; }
+.install-option > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+}
+.install-detail { margin-top: 0.5rem; }
+.command-wrap { position: relative; margin: 0.9rem 0; }
+.command-block {
+  display: flex;
+  align-items: flex-start;
+  border: 1px solid #243552;
+  border-radius: var(--r-sm);
+  background: #0C1220;
+  color: #DBEAFE;
+  overflow: hidden;
+}
+.command-block pre {
+  min-width: 0;
+  flex: 1;
+  overflow-x: auto;
+  padding: 1rem;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  scrollbar-width: thin;
+}
+.command-block code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.command-block button {
+  flex-shrink: 0;
+  margin: 0.7rem 0.6rem 0.7rem 0;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #395076;
+  border-radius: 5px;
+  background: #17243A;
+  color: #DBEAFE;
+  font: 600 0.7rem var(--fb);
+  cursor: pointer;
+}
+.command-block button:hover { background: #243552; }
+.copy-status {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--blue);
+  font-size: 0.7rem;
+}
+.copy-status:empty { display: none; }
+.install-next { margin-top: 2.5rem; border-top: 1px solid var(--border); }
+.install-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  gap: 3rem;
+  padding: 2rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.install-step > div { min-width: 0; }
+.install-step .command-wrap:first-child { margin-top: 0; }
+.install-step p code, .install-note code {
+  color: var(--text-2);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+.install-note { max-width: 720px; margin-top: 1.5rem; }
+.install-links { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 1rem; font-size: 0.8rem; }
+a:focus-visible, button:focus-visible, pre:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 4px;
 }
 
 /* ── Stats bar ───────────────────────────────────────────────── */
@@ -1060,6 +1189,8 @@ body {
 
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 840px) {
+  .install-options, .install-step { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+  .install-option + .install-option { border-top: 1px solid var(--border); padding-top: 1.5rem; }
   .steps        { grid-template-columns: 1fr; }
   .phones       { grid-template-columns: 1fr; justify-items: center; }
   .stack-grid   { grid-template-columns: 1fr; }
@@ -1069,6 +1200,19 @@ body {
   .nav-text-link { display: none; }
 }
 @media (max-width: 500px) {
+  .nav { padding: 0 1rem; }
+  .nav-right { gap: 0.8rem; }
+  .install-section { padding: 3.5rem 0; }
+  .hero-project-links { gap: 0.45rem; font-size: 0.75rem; }
   .hero-h1  { letter-spacing: -0.025em; }
   .hero-ctas { flex-direction: column; align-items: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

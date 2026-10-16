@@ -1,28 +1,30 @@
-# Landing Page
+# PodClipper website
 
-Static front-end landing page for Agentic Video Editor. Drop it into any GitHub Pages repo.
+React + Vite site at [podclipper.loukik.dev](https://podclipper.loukik.dev).
 
-## Setup
+## Develop
 
-1. **Copy your 3 demo videos** into `landing/videos/`:
+From this directory:
 
-```
-landing/
-  index.html
-  videos/
-    reel_01_sitas-challenge-ram-couldnt-ignore.mp4   ← from outputs/2026-04-19_03-01-56/
-    reel_01_7-lakh-crores-of-gold-looted.mp4          ← from outputs/
-    reel_03_id-trade-my-kingdom-for-her.mp4            ← from outputs/2026-04-19_00-48-25/
+```bash
+npm ci
+npm run dev
 ```
 
-2. **Update the GitHub URL** — search for `loukiknaik/agentic-video-editor` in `index.html`
-   and replace with your actual repo path.
+`src/App.jsx` contains the page and installation commands. `src/App.css` keeps
+the blue theme, Fraunces headings, and Instrument Sans body text. Demo videos
+live in `public/videos/`; public assets are copied into the build unchanged.
 
-3. **Deploy** — push the `landing/` folder contents as the root of a GitHub Pages branch
-   (e.g. `gh-pages`), or place `index.html` + `videos/` at the root of a portfolio repo.
+## Deploy
 
-## Notes
+```bash
+npm run build
+```
 
-- Videos autoplay muted and loop. No JavaScript libraries required.
-- Fonts are loaded from Google Fonts (requires internet).
-- Page is fully responsive down to 375px wide.
+Push landing changes to `main`. `.github/workflows/deploy-landing.yml` builds
+the site, sets its custom domain, and publishes `dist/` to the `gh-pages` branch.
+The workflow also supports a manual dispatch.
+
+Keep Homebrew/pip requirements and the shared `podclipper init` flow aligned
+with the root README and the published package. The page links to the PyPI
+package, Homebrew tap, configuration docs, releases, issues, and AGPL license.

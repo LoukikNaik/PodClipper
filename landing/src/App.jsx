@@ -75,6 +75,8 @@ function Nav() {
       </a>
       <div className="nav-right">
         <a href="#how" className="nav-text-link">How it works</a>
+        <a href={`${GH}#get-started`} className="nav-text-link">Docs</a>
+        <a href="#install" className="nav-install">Install</a>
         <a href={GH} className="nav-gh" target="_blank" rel="noopener noreferrer">
           <GithubIcon size={14} />
           GitHub
@@ -92,27 +94,30 @@ function Hero() {
       <div className="hero-inner">
         <div className="hero-badge">
           <span className="hero-badge-dot" />
-          Open source · Python · Claude AI
+          Open source · AGPL-3.0 · Python CLI
         </div>
         <h1 className="hero-h1">
-          {/* Computer vision plus LLM reasoning.<br /> */}
           Long podcasts. <span className="hero-highlight">Short reels.</span>
         </h1>
         <p className="hero-p">
-          We merged computer vision and LLM reasoning to convert long
-          podcasts into digestible short, interesting reels. PodClipper
-          picks the moments worth sharing, follows the active speaker
-          through camera cuts, and burns in karaoke captions. Ready to
-          post to TikTok, Reels, and Shorts.
+          Turn a podcast into vertical clips with captions. PodClipper
+          transcribes, finds useful moments, crops for 9:16, and exports
+          MP4s. Run it on your machine with your choice of LLM endpoint.
         </p>
         <div className="hero-ctas">
-          <a href={GH} className="btn-primary" target="_blank" rel="noopener noreferrer">
-            <GithubIcon size={15} />
-            Star on GitHub
+          <a href="#install" className="btn-primary">
+            Install PodClipper <ArrowRight />
           </a>
           <a href="#demo" className="btn-outline">
             See it in action <ArrowRight />
           </a>
+        </div>
+        <div className="hero-project-links">
+          <a href={GH}><GithubIcon size={15} /> Source code</a>
+          <span aria-hidden>·</span>
+          <a href="https://pypi.org/project/podclipper/">PyPI package</a>
+          <span aria-hidden>·</span>
+          <a href={`${GH}/blob/main/LICENSE`}>AGPL-3.0 license</a>
         </div>
       </div>
     </section>
@@ -121,9 +126,9 @@ function Hero() {
 
 // ── Stats bar ────────────────────────────────────────────────────
 const STATS = [
-  { n: 5,   suffix: '',   label: 'Reels from a single episode' },
+  { n: 8,   suffix: '',   label: 'Target clips per episode, configurable' },
   { n: 0,   suffix: '',   label: 'Manual editing steps required' },
-  { n: 100, suffix: '%',  label: 'Local. Audio never leaves your machine' },
+  { n: 1,   suffix: '',   label: 'LLM endpoint to configure' },
   { n: 1,   suffix: '',   label: 'Command to clip an entire episode' },
 ]
 
@@ -139,6 +144,95 @@ function StatsBar() {
         </div>
       ))}
     </div>
+  )
+}
+
+function CommandBlock({ command, label }) {
+  const [status, setStatus] = useState('')
+  useEffect(() => {
+    if (!status) return
+    const timer = setTimeout(() => setStatus(''), 2500)
+    return () => clearTimeout(timer)
+  }, [status])
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command)
+      setStatus('Copied')
+    } catch {
+      setStatus('Select the command and copy it manually.')
+    }
+  }
+
+  return (
+    <div className="command-wrap">
+      <div className="command-block">
+        <pre aria-label={label} tabIndex={0}><code>{command}</code></pre>
+        <button type="button" onClick={copy} aria-label={`Copy ${label}`}>
+          {status === 'Copied' ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <span className="copy-status" role="status">{status}</span>
+    </div>
+  )
+}
+
+function InstallSection() {
+  return (
+    <section className="install-section" id="install" aria-labelledby="install-heading">
+      <div className="container">
+        <div className="install-head">
+          <h2 className="h2" id="install-heading">Get started</h2>
+          <p className="lead">Install a package, add your LLM API key, and give it a video.</p>
+        </div>
+        <div className="install-options">
+          <article className="install-option">
+            <h3>Homebrew <span>Recommended for Mac</span></h3>
+            <p>Apple Silicon · macOS 14 or newer</p>
+            <CommandBlock command="brew install loukiknaik/tap/podclipper" label="Homebrew install command" />
+            <p className="install-detail">Installs Python 3.12 and FFmpeg for you.</p>
+            <a href="https://github.com/LoukikNaik/homebrew-tap/blob/main/Formula/podclipper.rb">View the Homebrew formula <ArrowRight /></a>
+          </article>
+          <article className="install-option">
+            <h3>pip <span>Python environment</span></h3>
+            <p>Python 3.10–3.12 · FFmpeg and ffprobe required</p>
+            <CommandBlock command="pip install podclipper" label="pip install command" />
+            <p className="install-detail">Run inside an activated virtual environment.</p>
+            <a href={`${GH}#1-install`}>Python and FFmpeg setup <ArrowRight /></a>
+          </article>
+        </div>
+        <div className="install-next">
+          <div className="install-step">
+            <div>
+              <h3>Set up once</h3>
+              <p>Creates <code>.env</code> and <code>podclipper.yaml</code> in your working folder.</p>
+            </div>
+            <div>
+              <CommandBlock command="podclipper init" label="setup command" />
+              <p>Add your OpenAI API key to <code>.env</code>:</p>
+              <CommandBlock command="LLM_API_KEY=your-api-key" label="API key setting for the .env file" />
+              <p className="install-detail">Using another OpenAI-compatible host? Set <code>LLM_ENDPOINT</code> and <code>LLM_MODEL</code> in the same file. <a href={`${GH}#llm-configuration`}>Configuration guide</a></p>
+            </div>
+          </div>
+          <div className="install-step">
+            <div>
+              <h3>Make your first reels</h3>
+              <p>Run from the same folder. Replace the path with your podcast video.</p>
+            </div>
+            <div>
+              <CommandBlock command={'podclipper "path/to/podcast.mp4"'} label="first run command" />
+              <p>Captioned 1080 × 1920 MP4s appear in <code>outputs/</code>. The first run downloads the local models; processing takes time, especially on CPU.</p>
+            </div>
+          </div>
+        </div>
+        <p className="install-note">Video and audio processing stay local. Transcripts are sent to your configured LLM endpoint; API usage may cost money.</p>
+        <div className="install-links">
+          <a href={`${GH}#everyday-commands`}>CLI usage</a>
+          <a href={`${GH}/releases`}>Releases</a>
+          <a href={`${GH}/issues`}>Report an issue</a>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -459,21 +553,21 @@ const STEPS = [
     n: '01',
     viz: TranscribeViz,
     title: 'Transcribe',
-    body: 'Your episode is transcribed in parallel. Audio chunks process concurrently so even a two-hour podcast finishes in the background while you keep working. Every word gets a precise timestamp the AI can reason over.',
+    body: 'Whisper transcribes the episode on your machine. A second pass transcribes each selected clip with a larger model and word timestamps for the captions. Models are downloaded on the first run and reused afterward.',
     tag: 'faster-whisper',
   },
   {
     n: '02',
     viz: AnalyzeViz,
     title: 'Analyze',
-    body: "Claude reads your entire transcript and finds moments that are genuinely shareable: a strong opening hook, a clear arc, and a satisfying close. It writes a scroll-stopping title for each clip, concise and curiosity-driven, grounded in what was actually said.",
-    tag: 'Claude AI',
+    body: 'Your configured LLM reads the transcript and selects moments with a clear opening, a complete idea, and a satisfying ending. It refines the cut boundaries and writes a title grounded in what was said.',
+    tag: 'Your LLM endpoint',
   },
   {
     n: '03',
     viz: EditViz,
     title: 'Edit',
-    body: "Every person is detected and tracked per frame. The crop mirrors the editor's cuts — one panel for close-ups, a stacked split when the shot goes wide — or, in comedian mode, stays locked on a single performer and never cuts to the audience. Word-by-word captions, an optional vibe-matched music bed, a fading title card, and a clean audio fade round out each reel, ready to upload.",
+    body: 'The crop follows the source camera cuts, using a single view for close-ups and up to two stacked views for wider shots. Word captions and a title are burned into vertical MP4s, with timestamps and review scores saved alongside.',
     tag: 'YOLOv8 + MediaPipe + FFmpeg',
   },
 ]
@@ -515,10 +609,10 @@ function StepCard({ step, delay }) {
 
 // ── Stack ─────────────────────────────────────────────────────────
 const STACK = [
-  { label: 'Transcription', title: 'faster-whisper (CTranslate2)', desc: 'One model, multiple threads. A full hour of podcast audio transcribes in the background with no per-worker memory overhead. Every word lands with a precise timestamp.' },
-  { label: 'AI Analysis',   title: 'Anthropic Claude',             desc: "Claude reads the full transcript and selects clips with a strong hook, a clear arc, and a satisfying close, then writes a scroll-stopping title for each. After rendering, a second LLM pass scores every reel on hook, arc, payoff, and standalone clarity, with a publish, review, or skip verdict." },
-  { label: 'Speaker Tracking', title: 'YOLOv8 + MediaPipe Pose', desc: "YOLOv8 finds every person and MediaPipe Pose anchors the framing. The renderer mirrors the editor's cuts — a single 9:16 panel for close-ups, a stacked dual-panel when the shot goes wide — with body-IoU locking so it re-frames only on real movement, not landmark jitter. Comedian mode instead locks one performer, using brightness and full-body geometry to reject the audience sitting in shadow." },
-  { label: 'Music & Export', title: 'FFmpeg + OpenCV + PIL', desc: 'OpenCV computes the crop window and pipes raw frames to FFmpeg; PIL burns the karaoke word highlights and the fading title. Optionally, an LLM scores a curated music library section-by-section for the clip’s vibe and sidechain-ducks the best match under the speech. Cached intermediates make re-runs near-instant.' },
+  { label: 'Transcription', title: 'faster-whisper (CTranslate2)', desc: 'A fast first pass helps select moments, then a larger model transcribes the selected clips for captions. Both passes run locally; no transcription service is required.' },
+  { label: 'AI Analysis', title: 'One OpenAI-compatible endpoint', desc: 'Choose your host, model, and API key. The same endpoint handles clip selection, title review, caption correction, and content scoring. Everything else runs locally.' },
+  { label: 'Speaker Tracking', title: 'YOLOv8 + MediaPipe', desc: 'Person detection guides the crop. Single and stacked views follow the source framing, and panel-divider detection keeps crops inside edited split screens. At most two source views appear at once.' },
+  { label: 'Video Export', title: 'FFmpeg + OpenCV + Pillow', desc: 'Local tools render the 9:16 crop, burn captions, and encode the final MP4. Intermediate files are cached for reruns. Music is optional; the default flow needs only your podcast video.' },
 ]
 
 function Stack() {
@@ -555,11 +649,11 @@ function CTABanner() {
   return (
     <section className="cta-section" ref={ref}>
       <div className={`cta-inner${visible ? ' visible' : ''}`}>
-        <h2 className="cta-h">Your episode archive is a goldmine.</h2>
-        <p className="cta-p">Every podcast you've ever recorded has shareable moments in it. PodClipper finds them for you. Free, open source, and runs entirely on your machine.</p>
+        <h2 className="cta-h">Built in the open.</h2>
+        <p className="cta-p">Read the code, report a rough edge, or help improve the next release. PodClipper is open source under AGPL-3.0.</p>
         <a href={GH} className="btn-cta" target="_blank" rel="noopener noreferrer">
           <GithubIcon size={16} />
-          View on GitHub
+          Explore the project
         </a>
       </div>
     </section>
@@ -589,6 +683,7 @@ export default function App() {
       <Nav />
       <Hero />
       <StatsBar />
+      <InstallSection />
       <Demo />
       <HowItWorks />
       <Stack />
