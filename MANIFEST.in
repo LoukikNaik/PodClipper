@@ -1,5 +1,6 @@
 include README.md LICENSE NOTICE pyproject.toml
 recursive-include src/podclipper *.py *.yaml *.txt
+recursive-include src/podclipper_web *.py
 prune .cursor
 prune .github
 prune corpus

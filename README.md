@@ -18,6 +18,16 @@ are sent to that endpoint.
 
 [Watch the demo](https://podclipper.loukik.dev)
 
+### Hosted workspace
+
+[Try the web workspace](https://podclipper.loukik.dev/#/try): sign in with Google,
+paste a public YouTube link, and return to your saved progress and private reels.
+The hosted service allows five videos per account per UTC calendar month, with
+5, 10, or 15 requested reels. Videos can be up to three hours; results are kept
+for seven days. Hosted processing runs on the operator's server and uses external
+AI services, as explained in the [privacy policy](https://podclipper.loukik.dev/privacy/).
+See [backend deployment](backend/README.md) to run the web service yourself.
+
 ## Get started
 
 ### 1. Install

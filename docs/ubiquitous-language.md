@@ -11,6 +11,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `04_final.json`                                                                                                                              | Analyze debug cache: clips after title rewrites — what the pipeline actually produces.                              |
 | `_FFmpegPipe` | Subtitle encoder with disk-backed diagnostics and bounded process cleanup. |
 | `_pick_performer`                                                                                                                            | Comedy-mode per-frame performer selector: scores persons by brightness + full-body geometry, rejects shadowed audience.|
+| `admin dashboard` | Read-only website view of all WebJobs and evaluated reels, restricted by the server to one configured Google account ID. |
 | `analyze/`                                                                                                                                   | Subdir of `.cache/<video>/` holding per-stage JSON snapshots from `analyze_for_reels`.                              |
 | `analyze_for_reels`                                                                                                                          | Stage 4: sends the timestamped transcript to an LLM and returns a list of `Clip` objects.                           |
 | `Apex` | Oriserve Whisper Hindi2Hinglish fine-tune used in standalone transcription trials; outputs Roman-script Hindi-English. |
@@ -28,7 +29,9 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `burn_subtitles`                                                                                                                             | Renders karaoke word-highlight subtitles + optional fading title overlay onto a video.                              |
 | `cache_dir`                                                                                                                                  | `cfg.paths.cache_dir` — root for all intermediate artifacts; default `.cache`.                                      |
 | `caption_repair` | Internal transcription settings for detecting missing caption speech and bounded retries of affected audio windows. |
+| `monthly allowance` | Five distinct source-video submissions per Google account per UTC calendar month; failed jobs release their reservation. |
 | `non_speech_regions` | Scribe-tagged laughter/applause gaps excluded from speech-coverage audits; spoken word intervals remain protected. |
+| `Studio` | Google-gated website workspace for submitting YouTube links and returning to private WebJob results, including advisory skip verdicts. |
 | `unreliable_ranges` | Bounded unresolved source-transcript spans, padded with context, barred from podcast and comedy clip selection after section retries; successful repairs are kept and exported clip caption checks stay strict. |
 | `caption reference` | Available first-pass word timings shifted into clip time; used to flag suspicious caption omissions, never copied as replacement speech. |
 | `caption_words.json` | Export sidecar containing the exact cleaned timed words burned into that reel and their source offset. |
@@ -134,6 +137,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `quotables.json`                                                                                                                             | Cached trailer LLM #1 output (`pick_quotables`) under `.cache/<video>/trailer/`.                                    |
 | `raw wide`                                                                                                                                   | Per-frame wide-shot decision before temporal smoothing by `shot_smooth_window_frames`.                              |
 | `Reel`                                                                                                                                       | One produced 9:16 short-form video — output of reels-mode pipeline.                                                 |
+| `reel poster` | Small JPEG of a finished reel's first frame, served through the same private user or admin media authorization as its video. |
 | `reel_detector.txt`                                                                                                                          | Selection prompt: tells the LLM what makes a reel-worthy clip.                                                      |
 | `reel_NN_<slug>.mp4`                                                                                                                         | Final reel naming convention; slug is derived from the title (lowercase, dash-separated, ≤40 chars).                |
 | `reel_NN_<slug>.txt`                                                                                                                         | Sidecar with title, reason, source bounds, hook_score, and the full evaluation scorecard.                           |
@@ -218,6 +222,9 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `try_hinglish.py` | Standalone local Apex transcription trial; saves raw text, timestamps, and model/runtime metadata. |
 | `verdict`                                                                                                                                    | Final reel/trailer label: `publish`                                                                                 |
 | `VideoMeta`                                                                                                                                  | Dataclass returned by `ingest`: `(path, duration, width, height, fps, has_audio, codec)`.                           |
+| `web worker` | Single persistent process that claims WebJobs, runs the existing PodClipper pipeline, and saves incremental results. |
+| `WebJob` | Persistent, user-owned website submission with quota reservation, processing stage, and private reel results. |
+| `WebSession` | Revocable Google-authenticated website session; only its token hash is stored in the database. |
 | `wide`                                                                                                                                       | Per-frame shot type meaning "two visible people, both shorter than the height cap, separated enough."               |
 | `wide-shot classifier`                                                                                                                       | `classify_wide_shot_frames`; pure bbox geometry, temporally smoothed.                                               |
 | `Word`                                                                                                                                       | Dataclass: `(start, end, text, confidence)` — Whisper word with timestamps.                                         |

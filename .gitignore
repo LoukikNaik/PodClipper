@@ -118,3 +118,4 @@ secrets.json
 *.bak
 *.orig
 .venv*
+web-data/
