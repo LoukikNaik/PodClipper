@@ -18,6 +18,8 @@ import numpy as np
 
 from .types import BBox, Timeline, TimelineSegment
 from .panels import SourcePanel, constrain_crop, detect_source_panels, panel_for_x
+from .face_identity import FaceIdentityGuard
+from .scenes import ScenePlan, render_full_frame
 
 log = logging.getLogger("ave.crop")
 
@@ -121,6 +123,8 @@ def smart_crop_916(
     out_path: Path,
     cfg: SimpleNamespace,
     debug_out: Optional[Path] = None,
+    *,
+    scene_plan: ScenePlan | None = None,
 ) -> Path:
     """DEPRECATED — legacy `crop.mode: single` renderer. Replaced by
     `smart_crop_916_stacked`. Kept for backward compatibility."""
@@ -166,6 +170,13 @@ def smart_crop_916(
     last_segment_idx = -1
     last_known_x: Optional[float] = None
     previous_panel: Optional[SourcePanel] = None
+    previous_shot = None
+    previous_signature = None
+    cuts = getattr(cfg.crop, "scene_cuts", None)
+    detect_cuts = bool(getattr(cuts, "enabled", True))
+    difference_threshold = float(getattr(cuts, "difference_threshold", 30.0))
+    transition = _CutTransition(round(float(getattr(cuts, "crossfade_seconds", 0.24)) * fps)
+                                if detect_cuts else 0)
 
     frame_idx = 0
     try:
@@ -174,8 +185,28 @@ def smart_crop_916(
             if not ok:
                 break
 
+            shot = scene_plan.at(frame_idx) if scene_plan is not None else {"id": 0, "mode": "speaker"}
+            signature = _scene_signature(frame) if detect_cuts else None
+            image_cut = (previous_signature is not None and signature is not None
+                         and float(np.abs(signature - previous_signature).mean()) >= difference_threshold)
+            previous_signature = signature
+            scene_cut = image_cut or (previous_shot is not None and shot["id"] != previous_shot)
+            if scene_cut:
+                smoothed_x = last_known_x = None
+                last_segment_idx = -1
+            previous_shot = shot["id"]
+            if shot["mode"] != "speaker":
+                resized = render_full_frame(frame, target_w, target_h)
+                resized = transition.apply(resized, scene_cut)
+                encoder.stdin.write(resized.tobytes())
+                if debug_encoder is not None:
+                    debug_encoder.stdin.write(frame.tobytes())
+                frame_idx += 1
+                continue
+
             t = frame_idx / fps
             seg_idx, seg = _segment_for_time(timeline, t)
+            segment_changed = last_segment_idx != -1 and seg_idx != last_segment_idx
 
             # On hard cut: reset EMA + seed last_known_x from the new segment's
             # first available bbox so the crop doesn't strand at the old shot's
@@ -216,6 +247,7 @@ def smart_crop_916(
 
             resized = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_AREA)
             resized = _apply_intro_zoom(resized, frame_idx, iz_frames, iz_max)
+            resized = transition.apply(resized, scene_cut or segment_changed)
 
             try:
                 encoder.stdin.write(resized.tobytes())
@@ -506,7 +538,8 @@ class _CutTransition:
         self.elapsed = 0
 
     def apply(self, frame: np.ndarray, cut: bool) -> np.ndarray:
-        if cut and self.previous is not None and self.duration > 1:
+        """Finish active dissolves even when several layout changes arrive together."""
+        if cut and self.previous is not None and self.duration > 1 and self.origin is None:
             self.origin = self.previous
             self.elapsed = 0
         if self.origin is not None:
@@ -527,6 +560,8 @@ def smart_crop_916_stacked(
     out_path: Path,
     cfg: SimpleNamespace,
     debug_out: Path | None = None,
+    *,
+    scene_plan: ScenePlan | None = None,
 ) -> Path:
     """Shot-aware 9:16 renderer: single panel for close-ups, stacked dual
     panels (9:8 each) for wide shots. Pose-anchored framing with body-bbox
@@ -583,9 +618,12 @@ def smart_crop_916_stacked(
     detect_cuts = bool(getattr(cuts, "enabled", True))
     difference_threshold = float(getattr(cuts, "difference_threshold", 30.0))
     cut_transition = _CutTransition(
-        round(float(getattr(cuts, "crossfade_seconds", 0.12)) * fps) if detect_cuts else 0)
+        round(float(getattr(cuts, "crossfade_seconds", 0.24)) * fps) if detect_cuts else 0)
     previous_signature = None
     pose_landmarker = _get_pose_landmarker(cfg)
+    identity_settings = getattr(cfg.crop, "face_identity", None)
+    face_guard = (FaceIdentityGuard(cfg) if getattr(identity_settings, "enabled", False)
+                  and not comedy_mode else None)
 
     tmp_video = Path(tempfile.mkstemp(prefix="ave_stack_", suffix=".mp4")[1])
     encoder = _open_ffmpeg_pipe(tmp_video, target_w, target_h, fps, cfg)
@@ -704,6 +742,10 @@ def smart_crop_916_stacked(
     prev_is_wide: Optional[bool] = None
     previous_panels: Optional[tuple[SourcePanel, ...]] = None
     selected_panels: tuple[int, ...] = ()
+    previous_shot = None
+    previous_full_source = None
+    stack_blocked = False
+    full_source_frames = stacked_frames = rejected_stacks = 0
     frame_idx = 0
     try:
         while True:
@@ -716,20 +758,39 @@ def smart_crop_916_stacked(
             else:
                 persons = per_frame_persons[frame_idx]
                 wide = bool(is_wide[frame_idx])
+            framing_changed = False
 
             signature = _scene_signature(frame) if detect_cuts else None
             image_cut = (previous_signature is not None and signature is not None
                          and float(np.abs(signature - previous_signature).mean()) >= difference_threshold)
             previous_signature = signature
+            shot = scene_plan.at(frame_idx) if scene_plan is not None else {"id": 0, "mode": "speaker"}
+            shot_changed = previous_shot is not None and shot["id"] != previous_shot
+            previous_shot = shot["id"]
+            preserve_source = shot["mode"] != "speaker"
+            subjects = []
+            if face_guard is not None and not preserve_source:
+                observed = face_guard.subjects(frame, persons)
+                for subject in sorted(observed, key=lambda item: item.face.area, reverse=True):
+                    if all(face_guard.distinct(frame, subject, other) for other in subjects):
+                        subjects.append(subject)
+                persons = [subject.person for subject in subjects]
+                preserve_source = not subjects
+            if preserve_source:
+                persons, wide = [], False
+            view_changed = previous_full_source is not None and preserve_source != previous_full_source
+            previous_full_source = preserve_source
             source_panels = detect_source_panels(frame, getattr(cfg.crop, "panel_dividers", None))
             layout_changed = (previous_panels is None or len(previous_panels) != len(source_panels)
                               or any(abs(a.left - b.left) > snap_px or abs(a.right - b.right) > snap_px
                                      for a, b in zip(previous_panels, source_panels)))
-            scene_cut = image_cut or (previous_panels is not None and layout_changed)
+            scene_cut = image_cut or shot_changed or view_changed or (previous_panels is not None and layout_changed)
             if layout_changed or scene_cut:
                 for slot in state:
                     _reset(slot)
                 selected_panels = ()
+                if layout_changed or image_cut or shot_changed:
+                    stack_blocked = False
             previous_panels = source_panels
 
             # Edited source panels are independent camera views. They need not
@@ -744,6 +805,10 @@ def smart_crop_916_stacked(
                 current = [p.x_center for p in persons if height_floor <= p.h <= height_cap]
                 wide = (len(current) >= 2 and max(current) - min(current)
                         >= float(getattr(cfg.crop, "shot_sep_frac", 0.20)) * src_w)
+            if stack_blocked or preserve_source:
+                wide = False
+            if face_guard is not None and prev_is_wide and not wide and not (image_cut or shot_changed or layout_changed):
+                stack_blocked = True
 
             # Reset locks across layout transitions
             mode_changed = prev_is_wide is not None and wide != prev_is_wide
@@ -752,7 +817,6 @@ def smart_crop_916_stacked(
                     _reset("top"); _reset("bot")
                 else:
                     _reset("single")
-            prev_is_wide = wide
 
             if wide:
                 qual = [(p.x_center, p) for p in persons
@@ -793,7 +857,13 @@ def smart_crop_916_stacked(
                 composite = np.vstack([top_panel, bot_panel])
                 composite[panel_h - 1:panel_h + 1, :] = (10, 10, 10)
                 dbg_boxes = [state["top"]["rendered"], state["bot"]["rendered"]]
-            else:
+                if face_guard is not None and not face_guard.valid_stack(
+                        frame, subjects, top_b, bot_b, *dbg_boxes):
+                    rejected_stacks += 1
+                    stack_blocked, wide = True, False
+                    _reset("single")
+                    mode_changed = prev_is_wide is not None and prev_is_wide
+            if not wide:
                 s = state["single"]
                 chosen: Optional[BBox] = None
                 if comedy_mode:
@@ -805,6 +875,10 @@ def smart_crop_916_stacked(
                                              src_w, src_h, comedy_bright_w, comedy_top_w)
                 else:
                     chosen = max(persons, key=lambda p: p.area, default=None)
+                    if s["body"] is not None and persons:
+                        held = max(persons, key=lambda p: _bbox_iou_tuple(_bbox_to_tuple(p), s["body"]))
+                        if _bbox_iou_tuple(_bbox_to_tuple(held), s["body"]) >= snap_cut_iou:
+                            chosen = held
 
                 crop_h = src_h
                 crop_w = max(1, int(round(crop_h * single_aspect)))
@@ -843,14 +917,22 @@ def smart_crop_916_stacked(
                         # hard cut / big jump (near-zero overlap) → snap, don't glide
                         if s["rendered"] is not None and iou < snap_cut_iou:
                             s["rendered"] = s["target"]
+                            framing_changed = True
                     locked = _advance_render(s)
 
                 locked = constrain_crop(locked, source_panel, src_h)
                 composite = _render_from_bbox(frame, locked, target_w, target_h)
                 dbg_boxes = [locked]
 
-            composite = _apply_intro_zoom(composite, frame_idx, iz_frames, iz_max)
-            composite = cut_transition.apply(composite, scene_cut or mode_changed)
+            prev_is_wide = wide
+            if preserve_source:
+                composite = render_full_frame(frame, target_w, target_h)
+                dbg_boxes = []
+                full_source_frames += 1
+            else:
+                composite = _apply_intro_zoom(composite, frame_idx, iz_frames, iz_max)
+                stacked_frames += int(wide)
+            composite = cut_transition.apply(composite, scene_cut or mode_changed or framing_changed)
             if debug_encoder is not None:
                 dbg = frame.copy()
                 for bb in dbg_boxes:
@@ -888,4 +970,6 @@ def smart_crop_916_stacked(
         log.info(f"Stacked crop debug (horizontal + crop box) → {debug_out}")
 
     log.info(f"Stacked crop complete → {out_path}")
+    log.info("Framing: %s stacked frames, %s full-source frames, %s unverified stacks rejected",
+             stacked_frames, full_source_frames, rejected_stacks)
     return out_path

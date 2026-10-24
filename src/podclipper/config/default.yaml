@@ -138,6 +138,22 @@ crop:
   ffmpeg_encoder: libx264
   ffmpeg_crf: 20
   ffmpeg_preset: medium
+  face_identity:
+    enabled: true
+    model_dir: null
+    detection_score: 0.8
+    min_face_height_frac: 0.06
+    min_relative_face_size: 0.40
+    similarity_threshold: 0.363
+    min_face_coverage: 0.95
+  scene_review:
+    enabled: true
+    cut_threshold: 20.0
+    min_scene_frames: 3
+    samples_per_scene: 3
+    batch_size: 3
+    max_attempts: 2
+    min_confidence: 0.70
   panel_dividers:                # respect edited split-screen source views
     enabled: true
     min_coverage: 0.90           # fraction of sampled rows containing the line
@@ -148,7 +164,7 @@ crop:
   scene_cuts:
     enabled: true               # fresh framing at image or divider-layout cuts
     difference_threshold: 30.0  # mean thumbnail pixel change (0–255)
-    crossfade_seconds: 0.12     # brief dissolve; zero keeps the source's hard cut
+    crossfade_seconds: 0.24     # brief dissolve; zero keeps the source's hard cut
   # Shot classifier (auto mode): when a frame has ≥2 person bboxes that are
   # each <height_cap_frac of source height AND separated by >=sep_frac of
   # source width, the frame is "wide" and gets stacked dual-panel rendering.

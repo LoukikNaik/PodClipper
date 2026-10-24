@@ -73,6 +73,22 @@ def _resolve(raw: dict, overrides: dict) -> SimpleNamespace:
         raise ValueError("transcribe.caption_repair.reference_ratio must be at most one")
     dividers = merged["crop"]["panel_dividers"]
     cuts = merged["crop"]["scene_cuts"]
+    identity = merged["crop"]["face_identity"]
+    scene_review = merged["crop"]["scene_review"]
+    for key in ("detection_score", "min_face_height_frac", "min_relative_face_size",
+                "similarity_threshold", "min_face_coverage"):
+        if isinstance(identity[key], bool) or not 0 < identity[key] <= 1:
+            raise ValueError(f"crop.face_identity.{key} must be greater than zero and at most one")
+    model_dir = identity["model_dir"]
+    if model_dir is not None and (not isinstance(model_dir, str) or not model_dir.strip()):
+        raise ValueError("crop.face_identity.model_dir must be null or a nonempty path string")
+    for key, maximum in (("cut_threshold", 255), ("min_confidence", 1)):
+        if isinstance(scene_review[key], bool) or not 0 < scene_review[key] <= maximum:
+            raise ValueError(f"crop.scene_review.{key} must be greater than zero and at most {maximum}")
+    for key, maximum in (("min_scene_frames", 30), ("samples_per_scene", 5),
+                         ("batch_size", 4), ("max_attempts", 3)):
+        if type(scene_review[key]) is not int or not 1 <= scene_review[key] <= maximum:
+            raise ValueError(f"crop.scene_review.{key} must be an integer from one to {maximum}")
     if not isinstance(cuts["enabled"], bool):
         raise ValueError("crop.scene_cuts.enabled must be a boolean")
     if (isinstance(cuts["crossfade_seconds"], bool)

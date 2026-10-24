@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import base64
 from types import SimpleNamespace
 
 from .base import LLMError
@@ -31,13 +32,21 @@ class LiteLLMProvider:
         user_prompt: str,
         system_prompt: str = "",
         max_tokens: int = 4096,
+        *,
+        images: list[bytes] | None = None,
     ) -> str:
         import litellm
 
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_prompt})
+        content = user_prompt
+        if images:
+            content = [{"type": "text", "text": user_prompt}]
+            content.extend({"type": "image_url", "image_url": {
+                "url": "data:image/jpeg;base64," + base64.b64encode(value).decode("ascii")}}
+                for value in images)
+        messages.append({"role": "user", "content": content})
 
         kwargs = {
             "model": self.model,

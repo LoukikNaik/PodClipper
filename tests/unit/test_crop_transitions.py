@@ -10,6 +10,7 @@ from podclipper.types import BBox
 
 def render(monkeypatch, tmp_path, frames, persons, wide):
     cfg = load_default_config()
+    cfg.crop.face_identity.enabled = False
     cfg.crop.target_width, cfg.crop.target_height = 108, 192
     cfg.crop.scene_cuts.crossfade_seconds = 0
     remaining = iter(frames)

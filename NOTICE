@@ -10,5 +10,13 @@ and its contributors: https://github.com/ultralytics/ultralytics
 Ultralytics code and model weights are offered under AGPL-3.0 or a separate
 Enterprise license. PodClipper uses the AGPL-3.0 option.
 
+Local face verification uses OpenCV Zoo's YuNet face detector (MIT, copyright
+2020 Shiqi Yu) and SFace face recognition model (Apache-2.0; contributed by
+Yaoyao Zhong, with OpenCV conversion by Chengrui Wang). Model files are fetched
+from a pinned OpenCV Zoo revision, checked against SHA-256 hashes, and cached
+alongside their upstream licenses. They are not bundled in the Python wheel.
+https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_detection_yunet
+https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface
+
 Other dependencies and downloaded model assets retain their respective
 copyright notices and licenses. This notice does not relicense them.

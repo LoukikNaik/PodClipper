@@ -42,6 +42,8 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `constrain_crop` | Fit a crop rectangle inside one source panel, preserving aspect ratio and an optional face anchor. |
 | `content` | Public config for content type, clip count and duration; resolves into pipeline settings. |
 | `ContentScores`                                                                                                                              | Dataclass holding the 6 reel-evaluator dimensions + overall/verdict/feedback.                                       |
+| `crop.face_identity` | Internal controls for local YuNet/SFace foreground-face matching before stacking; ambiguous or duplicate faces use one view. |
+| `crop.scene_review` | Internal controls for cached LLM classification of source shots before choosing speaker or full-frame rendering. |
 | `cropped.mp4`                                                                                                                                | Per-clip cache artifact: the cropped video before subtitles are burned.                                             |
 | `cropped_regen.mp4`                                                                                                                          | Per-clip cache artifact written by `regen_crops.py` (avoids overwriting `cropped.mp4`).                             |
 | `cut_segment`                                                                                                                                | Trailer ffmpeg cut for one pick's [cut_start, cut_end] window.                                                      |
@@ -64,6 +66,8 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `face_aware`                                                                                                                                 | `cfg.detect.face_aware`: when true, anchors crop x on face center instead of body center.                           |
 | `face_landmarker.task`                                                                                                                       | MediaPipe FaceLandmarker model (lip/face landmarks) used by the diarize path.                                       |
 | `face_per_person`                                                                                                                            | Output of `_attribute_faces_to_persons`: `face_bbox_or_None` aligned with input persons.                            |
+| `FaceIdentityGuard` | Local YuNet detection and SFace comparison that verifies distinct visible faces in stacked crops without naming people. |
+| `FaceSubject` | A foreground face, its source person box, and an in-memory recognition feature vector. |
 | `fade_out_seconds`                                                                                                                           | `cfg.subtitles.fade_out_seconds`: trailing video-to-black + audio fade duration.                                    |
 | `first pass`                                                                                                                                 | Whisper run #1: parallel-chunked fast transcription over the whole video for LLM clip selection.                    |
 | `first_pass_transcript.json`                                                                                                                 | Cached `Transcript` from the first-pass Whisper run; reused on subsequent runs.                                     |
@@ -136,14 +140,19 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `refined_bounds.json`                                                                                                                        | Cached trailer refiner output under `.cache/<video>/trailer/`.                                                      |
 | `refiner_window_s`                                                                                                                           | `cfg.analyze.refiner_window_s` / `cfg.trailer.refiner_window_s`: ±seconds of word context shown to refiner.         |
 | `regen_crops.py`                                                                                                                             | Script that re-renders cached reels with the latest crop logic (skips LLM + audio + 1st-pass).                      |
+| `render checkpoint` | Input fingerprint for a completed crop or caption cleanup; retries reuse only matching artifacts. |
+| `render_cache.py` | Clip-bound cache identity and atomic render checkpoints shared by retries. |
+| `render_full_frame` | Preserve a complete source shot on a blurred canvas that fills the vertical reel. |
 | `resolved config` | Internal defaults recursively merged with user overrides and CLI overrides. |
 | `repair_caption_words` | Validate caption timings against audio speech and optional first-pass words, retry affected windows, and preserve unaffected words. |
 | `review`                                                                                                                                     | Reel verdict: overall content score between `skip_threshold` and `publish_threshold`.                               |
+| `review_scenes` | Detect source cuts locally, then classify representative shot frames with the shared vision-capable LLM endpoint. |
 | `routing` | Optional `llm.routing` settings forwarded as the endpoint provider routing field. |
 | `run_pipeline`                                                                                                                               | Entry point for reels mode (`--mode reels`), in `src/pipeline.py`.                                                  |
 | `run_trailer_pipeline`                                                                                                                       | Entry point for trailer mode (`--mode trailer`), in `src/pipeline.py`.                                              |
 | `scene_cuts` | Internal auto-crop config for image-cut detection, fresh framing and an optional short crossfade; zero fade duration preserves hard cuts. |
 | `_scene_signature` | Small blurred frame thumbnail used to detect abrupt source-image changes independently of participant identity. |
+| `ScenePlan` | Cached, frame-indexed source shot decisions: speaker, audience, other, or uncertain. |
 | `second pass`                                                                                                                                | Whisper run #2: single-shot high-quality re-transcription per clip; produces subtitle word timings.                 |
 | `segment.mp4`                                                                                                                                | Per-clip cache artifact: raw ffmpeg-extracted clip segment with `pad_seconds` buffer.                               |
 | `select-only` | CLI --select-only: runs first-pass transcription and complete clip analysis, then saves selection reports and stops. |
