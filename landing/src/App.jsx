@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import Studio from './Studio.jsx'
 
 const GH = 'https://github.com/LoukikNaik/PodClipper'
 
@@ -74,6 +75,7 @@ function Nav() {
         PodClipper
       </a>
       <div className="nav-right">
+        <a href="#/try" className="nav-install">Try PodClipper</a>
         <a href="#how" className="nav-text-link">How it works</a>
         <a href={`${GH}#get-started`} className="nav-text-link">Docs</a>
         <a href="#install" className="nav-install">Install</a>
@@ -102,14 +104,14 @@ function Hero() {
         <p className="hero-p">
           Turn a podcast into vertical clips with captions. PodClipper
           transcribes, finds useful moments, crops for 9:16, and exports
-          MP4s. Run it on your machine with your choice of LLM endpoint.
+          MP4s. Try the web workspace, or run it locally with your choice of LLM endpoint.
         </p>
         <div className="hero-ctas">
-          <a href="#install" className="btn-primary">
-            Install PodClipper <ArrowRight />
+          <a href="#/try" className="btn-primary">
+            Try PodClipper <ArrowRight />
           </a>
-          <a href="#demo" className="btn-outline">
-            See it in action <ArrowRight />
+          <a href="#install" className="btn-outline">
+            Install locally <ArrowRight />
           </a>
         </div>
         <div className="hero-project-links">
@@ -225,7 +227,7 @@ function InstallSection() {
             </div>
           </div>
         </div>
-        <p className="install-note">Video and audio processing stay local. Transcripts are sent to your configured LLM endpoint; API usage may cost money.</p>
+        <p className="install-note">Video and audio processing stay local. Transcripts and sampled source frames are sent to your configured LLM endpoint; API usage may cost money.</p>
         <div className="install-links">
           <a href={`${GH}#everyday-commands`}>CLI usage</a>
           <a href={`${GH}/releases`}>Releases</a>
@@ -668,6 +670,7 @@ function Footer() {
         <span className="footer-logo">✂ PodClipper</span>
         <span className="footer-sub">by <strong>Loukik Naik</strong></span>
       </div>
+      <a href="/privacy/" className="footer-gh">Privacy policy</a>
       <a href={GH} className="footer-gh" target="_blank" rel="noopener noreferrer">
         <GithubIcon size={14} />
         github.com/LoukikNaik/PodClipper
@@ -678,6 +681,13 @@ function Footer() {
 
 // ── App ───────────────────────────────────────────────────────────
 export default function App() {
+  const [route, setRoute] = useState(window.location.hash)
+  useEffect(() => {
+    const change = () => setRoute(window.location.hash)
+    window.addEventListener('hashchange', change)
+    return () => window.removeEventListener('hashchange', change)
+  }, [])
+  if (route.startsWith('#/try') || route.startsWith('#/jobs/') || route.startsWith('#/admin')) return <Studio />
   return (
     <>
       <Nav />

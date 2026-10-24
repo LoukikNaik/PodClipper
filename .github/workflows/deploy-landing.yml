@@ -22,13 +22,17 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: landing/package-lock.json
 
       - name: Install dependencies
         working-directory: landing
         run: npm ci
+
+      - name: Check workspace navigation
+        working-directory: landing
+        run: npm test
 
       - name: Build
         working-directory: landing
