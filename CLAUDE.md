@@ -46,13 +46,13 @@ one row per name, no sections. Keep it that way.
 Source video
   ↓  ingest             ffprobe metadata
   ↓  audio              ffmpeg → 16 kHz mono WAV
-  ↓  transcribe (1st)   mlx-whisper base, per-clip language auto-detect
+  ↓  transcribe (1st)   Whisper base, per-clip language auto-detect
   ↓  analyze            Claude picks reel-worthy clips (JSON list)
   │
   ↓  per clip:
   │     extract         ffmpeg cut with ±2 s pad
   │     detect          YOLOv8 person bboxes + MediaPipe face attribution
-  │     transcribe (2)  mlx-whisper large-v3 (VAD + garble-retry, cached)
+  │     transcribe (2)  Whisper large-v3 (VAD + garble-retry, cached)
   │     shot-classify   per-frame single vs two-shot (≥2 real people)
   │     crop            shot-aware:
   │                       single  → 9:16 follow-the-speaker
@@ -77,13 +77,16 @@ Source video
 | `src/podclipper/audio.py` | Whole-video audio extraction. |
 | `src/podclipper/transcribe.py` | Whisper 1st/2nd-pass + `transcribe_second_pass_cached` (JSON cache). Engine behind `cfg.transcribe.engine` = `faster` (default, faster-whisper) \| `mlx` (Apple-Silicon GPU). Auto-detects language per clip; VAD + `condition_on_previous_text=false` guard against hallucination; garble-retry re-runs with `fallback_languages` when auto-detect returns a suspiciously sparse transcript. |
 | `src/podclipper/transcribe_cleanup.py` | LLM post-pass to fix Whisper mis-spellings / transliterate non-Latin. |
-| `src/podclipper/transcribe_repair.py` | Audio speech coverage and first-pass comparison for caption gaps. Retries bounded windows with context, including cached captions; unresolved gaps stop clip export. Internal overrides live in `transcribe.caption_repair`; `words.quality.json` records retries. |
+| `src/podclipper/scribe.py` | Experimental `--scribe` backend: full-source OpenRouter Scribe v2 transcription in resumable overlapping chunks, word-based overlap ownership, bounded speech-coverage repairs, and timestamp slicing for reel captions without a mandatory Whisper second pass. Uses the shared endpoint/key; default is off. |
+| `src/podclipper/transcribe_repair.py` | Audio speech coverage and first-pass comparison for caption gaps. Retries bounded windows with context, including cached captions; unresolved gaps stop clip export. Internal overrides live in `transcribe.caption_repair`; `words.quality.json` records retries. `render_cache.py` keys clip caches by source identity and bounds, reuses matching crop/cleanup stages, and can reuse parent-clip timed words for trims. Exports include `.captions.json` with the exact burned words; caption cleanup retries chunks and fails explicitly after exhaustion. |
 | `src/podclipper/analyze.py` | LLM clip selection — reads transcript, returns `Clip[]`. |
 | `src/podclipper/llm/` | Provider abstraction. `litellm_provider.py` (shared OpenAI-compatible endpoint client). |
 | `src/podclipper/detect.py` | YOLOv8 + MediaPipe BlazeFace. **Two entry points:** `detect_humans_per_frame` (single primary, legacy) and `detect_humans_all_per_frame` (all persons + face flags, used by shot-aware path). |
 | `src/podclipper/timeline.py` | Two responsibilities: (1) legacy `build_speaker_timeline` for the single-crop path, (2) `classify_wide_shot_frames` for the shot-aware path — two-shot = ≥2 people above a min-size **floor** (`shot_min_person_frac`, ignores tiny background people) separated by ≥`shot_sep_frac`, with an optional min-dwell debounce. |
 | `src/podclipper/crop.py` | Two renderers: legacy `smart_crop_916` (single-panel timeline-driven) and `smart_crop_916_stacked` (shot-aware, single ↔ stacked dual-panel; body-IoU lock + lerp + **snap-on-cut**, optional intro-zoom, `debug_out` horizontal overlay). |
 | `src/podclipper/panels.py` | Detect thin vertical source-panel dividers and constrain crops to source views. Both crop renderers respect bounds; auto mode shows at most two views. Auto crop resets tracking on camera/layout cuts and optionally crossfades without added zoom animation. |
+| `src/podclipper/scenes.py` | Detect source cuts locally, batch representative frames through the shared vision-capable LLM, and cache frame-indexed speaker/audience/other/uncertain decisions in each clip's `scenes.json`. Both renderers preserve full source framing for non-speaker shots and reset at the next speaker shot. |
+| `src/podclipper/face_identity.py` | Local YuNet/SFace foreground-face matching before stacking. Verify distinct identities and actual crop coverage; collapse duplicate or unverifiable panels. Pinned, checksum-verified models and upstream licenses cache in `~/.cache/podclipper/models/`; embeddings are transient and anonymous. |
 | `src/podclipper/music.py` | Optional background music: `load_library` (manifest), `select_track` (LLM per-section vibe-scoring → argmax, or None if none clears `min_score`), `mix_music` (ducked bed, plays past the section end, loops only at EOF). Behind `--music`. |
 | `src/podclipper/subtitles.py` | Two renderers: `_burn_classic` (karaoke word highlight + fading title + audio fade-out) and `_burn_pop` (1–2 huge sheared words, alternating highlight color). `burn_subtitles` dispatches by `cfg.subtitles.style` (`classic` \| `pop`). |
 | `src/podclipper/evaluate.py` | LLM-as-judge scorer; writes `verdict` + numeric scores into reel sidecar. |
@@ -269,9 +272,11 @@ Per source video, intermediates persist under `.cache/<stem>-<hash>/`:
 ```
 .cache/myvideo-a2340ae50a/
   audio.wav                                  # full-video audio
-  reel_01_some-title/
+  clip-<bounds-and-source-hash>/
     segment.mp4                              # extracted clip
+    clip.json                                # source bounds and output name
     words.json                               # cached Whisper 2nd pass
+    caption_words.json                       # cleaned words used by captions
     cropped.mp4 / cropped_regen.mp4          # working crop output
 ```
 
@@ -319,7 +324,7 @@ podclipper video.mp4 --captions pop
 # Intro zoom (punch-in → pull-out opener) + background music (LLM-matched bed)
 podclipper video.mp4 --intro-zoom --music
 
-# Comedy / single-performer: never stack, lock on the performer, ignore audience
+# Comedy: select complete jokes, preserve a reaction tail, never stack
 podclipper video.mp4 --type comedy
 
 # Only consider the first N minutes for clip selection (no re-encode of the rest)
@@ -396,9 +401,12 @@ problem by showing both people whenever the source goes wide.
   net re-runs with `fallback_languages` only when auto returns a suspiciously
   sparse transcript (the accented-English-heard-as-Hindi failure). The old
   episode-level language pinning was removed — it broke odd-language-out clips.
-- **Audio doesn't leave the machine — transcript does.** The `100% Local`
-  framing on the landing page refers to audio. LLM clip selection sends
-  the transcript to Claude (CLI or API).
+- **Audio processing stays local by default.** Experimental `--scribe` uploads
+  source audio chunks to OpenRouter/ElevenLabs using the shared endpoint/key;
+  it reuses those timed words instead of running normal Whisper passes.
+  Transcripts and representative source
+  frames go to the configured LLM endpoint. Source-shot review requires
+  image input from that same model; do not add a second provider config.
 - **The diarization path is brittle.** Pyannote-3.1 frequently merges or
   splits speakers on conversational podcast audio, and even when correct
   it provides no signal for which side of the screen the speaker is on.

@@ -111,6 +111,8 @@ def _transcribe_array_mlx(
     word_timestamps: bool,
     time_offset: float,
     condition_on_previous_text: bool,
+    task: str = "transcribe",
+    initial_prompt: str | None = None,
 ) -> tuple[list[TranscriptSegment], str]:
     """mlx-whisper path (Apple-Silicon GPU) — default engine."""
     import mlx_whisper
@@ -120,6 +122,8 @@ def _transcribe_array_mlx(
         language=language,
         word_timestamps=word_timestamps,
         condition_on_previous_text=condition_on_previous_text,
+        task=task,
+        initial_prompt=initial_prompt,
     )
     segments: list[TranscriptSegment] = []
     for s in r["segments"]:
@@ -152,6 +156,8 @@ def _transcribe_array(
     time_offset: float = 0.0,
     vad_filter: bool = True,
     condition_on_previous_text: bool = False,
+    task: str = "transcribe",
+    initial_prompt: str | None = None,
 ) -> tuple[list[TranscriptSegment], str]:
     """Transcribe an in-memory audio array; timestamps shifted by `time_offset`
     so they're video-relative for chunked first-pass calls. `engine` selects
@@ -165,6 +171,7 @@ def _transcribe_array(
         return _transcribe_array_mlx(
             model, audio, language=language, word_timestamps=word_timestamps,
             time_offset=time_offset, condition_on_previous_text=condition_on_previous_text,
+            task=task, initial_prompt=initial_prompt,
         )
     segments_iter, info = model.transcribe(
         audio,
@@ -173,6 +180,8 @@ def _transcribe_array(
         word_timestamps=word_timestamps,
         vad_filter=vad_filter,
         condition_on_previous_text=condition_on_previous_text,
+        task=task,
+        initial_prompt=initial_prompt,
     )
 
     segments: list[TranscriptSegment] = []
@@ -299,6 +308,11 @@ def transcribe_second_pass(
 
     audio = _decode_audio_to_float32(clip_audio_or_video)
     duration = len(audio) / _WHISPER_SAMPLE_RATE
+    task = getattr(sp, "task", "transcribe")
+    prompt = getattr(sp, "initial_prompt", None)
+    log.info("Clip transcription: language=%s, task=%s, beam=%s, VAD=%s, vocabulary_hint=%s",
+             cfg.transcribe.language or "auto", task, sp.beam_size,
+             getattr(cfg.transcribe, "vad_filter", True), bool(prompt))
 
     def _run(lang: str | None) -> tuple[list[Word], str]:
         segs, detected = _transcribe_array(
@@ -310,6 +324,7 @@ def transcribe_second_pass(
             time_offset=0.0,
             vad_filter=getattr(cfg.transcribe, "vad_filter", True),
             condition_on_previous_text=getattr(cfg.transcribe, "condition_on_previous_text", False),
+            task=task, initial_prompt=prompt,
         )
         return [w for seg in segs for w in seg.words], detected
 
@@ -319,7 +334,7 @@ def transcribe_second_pass(
     # accented English heard as Hindi), which drops most words. If the auto
     # transcript is suspiciously sparse, retry with the fallback language(s) and
     # keep the fullest — so we only "force" a language when auto actually failed.
-    if (cfg.transcribe.language is None and duration >= 3.0
+    if (cfg.transcribe.language is None and task == "transcribe" and duration >= 3.0
             and getattr(cfg.transcribe, "retry_on_garble", True)):
         wps = len(words) / duration
         min_wps = float(getattr(cfg.transcribe, "garble_min_words_per_sec", 1.5))
@@ -357,6 +372,8 @@ def _repair_second_pass(words, audio, cfg, reference_words, report_path):
             word_timestamps=True, time_offset=start,
             vad_filter=getattr(cfg.transcribe, "vad_filter", True),
             condition_on_previous_text=False,
+            task=getattr(sp, "task", "transcribe"),
+            initial_prompt=getattr(sp, "initial_prompt", None),
         )
         return [word for segment in segments for word in segment.words]
 

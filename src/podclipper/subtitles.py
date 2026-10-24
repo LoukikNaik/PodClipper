@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .types import Word
+from .caption_text import normalize_caption_punctuation
 
 log = logging.getLogger("ave.subtitles")
 
@@ -329,15 +331,58 @@ def _render_title_onto_frame(
     return cv2.cvtColor(np.array(merged), cv2.COLOR_RGB2BGR)
 
 
+class _FFmpegPipe:
+    """Encode frames without blocking on diagnostics; always reap failed encoders."""
+
+    def __init__(self, cmd):
+        self.stderr = tempfile.TemporaryFile()
+        try:
+            self.process = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self.stderr,
+            )
+        except BaseException:
+            self.stderr.close()
+            raise
+        self.stdin = self.process.stdin
+
+    def error(self):
+        self.stderr.seek(0, os.SEEK_END)
+        self.stderr.seek(max(0, self.stderr.tell() - 2000))
+        return self.stderr.read().decode("utf-8", errors="replace")[-2000:]
+
+    def abort(self):
+        if self.process.poll() is None:
+            self.process.kill()
+        self.process.wait()
+        try:
+            self.stdin.close()
+        except BrokenPipeError:
+            pass
+        self.stderr.close()
+
+    def finish(self, timeout):
+        try:
+            self.stdin.close()
+            ret = self.process.wait(timeout=timeout)
+            if ret:
+                raise SubtitleError(f"ffmpeg encoder exited with {ret}: {self.error()}")
+        except subprocess.TimeoutExpired as exc:
+            raise SubtitleError(f"ffmpeg encoder did not finish within {timeout}s: {self.error()}") from exc
+        except BrokenPipeError as exc:
+            raise SubtitleError(f"ffmpeg encoder closed its input: {self.error()}") from exc
+        finally:
+            self.abort()
+
+
 def _open_ffmpeg_pipe(
     out_path: Path,
     width: int,
     height: int,
     fps: float,
     cfg: SimpleNamespace,
-) -> subprocess.Popen:
+) -> _FFmpegPipe:
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-y", "-loglevel", "error", "-nostats",
         "-f", "rawvideo",
         "-vcodec", "rawvideo",
         "-pix_fmt", "bgr24",
@@ -347,13 +392,11 @@ def _open_ffmpeg_pipe(
         "-c:v", cfg.crop.ffmpeg_encoder,
         "-pix_fmt", "yuv420p",
         "-crf", str(cfg.crop.ffmpeg_crf),
-        "-preset", cfg.crop.ffmpeg_preset,
+        "-preset", getattr(cfg.subtitles, "ffmpeg_preset", None) or cfg.crop.ffmpeg_preset,
         "-an",
         str(out_path),
     ]
-    return subprocess.Popen(
-        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-    )
+    return _FFmpegPipe(cmd)
 
 
 def _mux_audio(
@@ -400,6 +443,7 @@ def burn_subtitles(
     title: str = "",
 ) -> Path:
     """Dispatch to the classic or pop subtitle renderer based on cfg.subtitles.style."""
+    words = normalize_caption_punctuation(words)
     style = getattr(cfg.subtitles, "style", "classic")
     if style == "off":
         import shutil
@@ -536,8 +580,15 @@ def _burn_pop(
     shear_deg = float(pcfg.shear_deg)
     y_frac = float(pcfg.y_position_frac)
 
-    tmp_video = Path(tempfile.mkstemp(prefix="ave_pop_", suffix=".mp4")[1])
-    encoder = _open_ffmpeg_pipe(tmp_video, width, height, fps, cfg)
+    descriptor, temporary = tempfile.mkstemp(prefix="ave_pop_", suffix=".mp4")
+    os.close(descriptor)
+    tmp_video = Path(temporary)
+    try:
+        encoder = _open_ffmpeg_pipe(tmp_video, width, height, fps, cfg)
+    except BaseException:
+        cap.release()
+        tmp_video.unlink(missing_ok=True)
+        raise
 
     pop_idx = 0
     frame_idx = 0
@@ -573,17 +624,21 @@ def _burn_pop(
             try:
                 encoder.stdin.write(frame.tobytes())
             except BrokenPipeError as e:
-                stderr = encoder.stderr.read().decode("utf-8", errors="replace")[-500:]
+                stderr = encoder.error()
                 raise SubtitleError(f"ffmpeg encoder died: {stderr}") from e
             frame_idx += 1
+    except BaseException:
+        encoder.abort()
+        tmp_video.unlink(missing_ok=True)
+        raise
     finally:
         cap.release()
 
-    encoder.stdin.close()
-    ret = encoder.wait(timeout=120)
-    if ret != 0:
-        stderr = encoder.stderr.read().decode("utf-8", errors="replace")[-500:]
-        raise SubtitleError(f"ffmpeg encoder exited with {ret}: {stderr}")
+    try:
+        encoder.finish(timeout=float(getattr(cfg.subtitles, "encoder_timeout_seconds", 600)))
+    except BaseException:
+        tmp_video.unlink(missing_ok=True)
+        raise
 
     rendered_duration = frame_idx / fps if fps > 0 else 0.0
     log.info(f"Pop-subtitled {frame_idx} frames → muxing audio...")
@@ -650,8 +705,15 @@ def _burn_classic(
         title_lines = _wrap_title(title, int(tcfg.max_chars_per_line))
         title_font = _load_font(int(tcfg.font_size), cfg.subtitles.font_name)
 
-    tmp_video = Path(tempfile.mkstemp(prefix="ave_sub_", suffix=".mp4")[1])
-    encoder = _open_ffmpeg_pipe(tmp_video, width, height, fps, cfg)
+    descriptor, temporary = tempfile.mkstemp(prefix="ave_sub_", suffix=".mp4")
+    os.close(descriptor)
+    tmp_video = Path(temporary)
+    try:
+        encoder = _open_ffmpeg_pipe(tmp_video, width, height, fps, cfg)
+    except BaseException:
+        cap.release()
+        tmp_video.unlink(missing_ok=True)
+        raise
 
     frame_idx = 0
     try:
@@ -685,17 +747,21 @@ def _burn_classic(
             try:
                 encoder.stdin.write(frame.tobytes())
             except BrokenPipeError as e:
-                stderr = encoder.stderr.read().decode("utf-8", errors="replace")[-500:]
+                stderr = encoder.error()
                 raise SubtitleError(f"ffmpeg encoder died: {stderr}") from e
             frame_idx += 1
+    except BaseException:
+        encoder.abort()
+        tmp_video.unlink(missing_ok=True)
+        raise
     finally:
         cap.release()
 
-    encoder.stdin.close()
-    ret = encoder.wait(timeout=120)
-    if ret != 0:
-        stderr = encoder.stderr.read().decode("utf-8", errors="replace")[-500:]
-        raise SubtitleError(f"ffmpeg encoder exited with {ret}: {stderr}")
+    try:
+        encoder.finish(timeout=float(getattr(cfg.subtitles, "encoder_timeout_seconds", 600)))
+    except BaseException:
+        tmp_video.unlink(missing_ok=True)
+        raise
 
     rendered_duration = frame_idx / fps if fps > 0 else 0.0
     log.info(

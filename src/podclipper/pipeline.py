@@ -8,7 +8,7 @@ import logging
 import math
 import re
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -29,9 +29,13 @@ from .detect import detect_humans_per_frame, detect_humans_all_per_frame
 from .ingest import ingest
 from .llm import build_provider
 from .logging_util import get_console
+from .scenes import review_scenes
 from .music import load_library, mix_music, select_track
+from .render_cache import (asr_inputs, caption_inputs, checkpoint, checkpoint_matches, clip_cache_dir,
+                           crop_inputs, file_identity, reuse_containing_words, word_provenance, write_json)
 from .evaluate import evaluate_reel, evaluate_trailer
 from .subtitles import burn_subtitles
+from .caption_text import normalize_caption_punctuation
 from .timeline import apply_min_dwell, build_speaker_timeline, classify_wide_shot_frames
 from .trailer import (
     concat_with_black_gaps,
@@ -76,6 +80,7 @@ def _extract_clip_segment(
     end = min(video_duration, clip.end + pad_s)
     duration = end - start
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = out_path.with_name(out_path.stem + ".partial" + out_path.suffix)
 
     cmd = [
         "ffmpeg", "-y",
@@ -87,12 +92,15 @@ def _extract_clip_segment(
         "-preset", cfg.clip_extract.preset,
         "-c:a", "aac",
         "-movflags", "+faststart",
-        str(out_path),
+        str(temporary),
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
+        temporary.replace(out_path)
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffmpeg clip extract failed: {e.stderr.strip()[-500:]}") from e
+    finally:
+        temporary.unlink(missing_ok=True)
     return out_path
 
 
@@ -162,17 +170,36 @@ def run_pipeline(
     cache = _cache_dir_for(cfg, input_path)
     transcript = None
     transcript_cache = cache / f"first_pass_transcript{limit_tag}.json"
+    scribe = None
+    scribe_enabled = getattr(getattr(cfg.transcribe, "scribe", None), "enabled", False)
     if selection_path is not None and select_only:
         raise ValueError("Cannot combine a saved selection with select_only")
     if selection_path is not None:
         clips = _load_saved_selection(Path(selection_path), meta.path, meta.duration)
+        if scribe_enabled and any(
+                min(meta.duration, c.end + cfg.clip_extract.pad_seconds) > analyze_duration for c in clips):
+            raise ValueError("Saved clips extend beyond the Scribe source limit; remove --limit-minutes or increase it")
+    if scribe_enabled:
+        from .scribe import ScribeTranscriber
+        scribe = ScribeTranscriber(cfg, cache, use_cache)
+        audio_wav = cache / f"audio_scribe{limit_tag}.wav"
+        audio_key = [file_identity(meta.path), analyze_duration, "scribe-pcm16-16khz"]
+        extract_audio(meta.path, audio_wav, sample_rate=16000, codec="pcm_s16le",
+                      overwrite=not use_cache or not checkpoint_matches(audio_wav, audio_key),
+                      duration_limit=source_limit)
+        checkpoint(audio_wav, audio_key)
+        transcript = scribe.full_transcript(audio_wav, analyze_duration)
+        if selection_path is not None and any(c.start < b and c.end > a for c in clips
+                                              for a, b in scribe.unreliable_ranges):
+            raise ValueError("Saved selection overlaps unresolved source transcription; repair those sections before export")
+    if selection_path is not None:
         log.info(f"Rendering {len(clips)} saved clips from {selection_path}")
-        if use_cache and transcript_cache.exists():
+        if not scribe and use_cache and transcript_cache.exists():
             try:
                 transcript = _transcript_from_json(json.loads(transcript_cache.read_text()))
             except (KeyError, TypeError, ValueError):
                 log.warning("First-pass caption reference is unreadable; using audio speech checks only")
-    else:
+    elif not scribe:
         audio_wav = cache / f"audio{limit_tag}.wav"
         extract_audio(
             meta.path, audio_wav,
@@ -190,8 +217,11 @@ def run_pipeline(
             transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
             log.info(f"Cached first-pass transcript → {transcript_cache}")
 
+    if selection_path is None:
         selection_provider = build_provider(cfg.llm)
-        clips = analyze_for_reels(transcript, analyze_duration, selection_provider, cfg, debug_cache_dir=cache)
+        exclusions = {"excluded_ranges": scribe.unreliable_ranges} if scribe and scribe.unreliable_ranges else {}
+        clips = analyze_for_reels(transcript, analyze_duration, selection_provider, cfg,
+                                  debug_cache_dir=cache, **exclusions)
 
     # No language pinning: the 2nd pass auto-detects per clip, so a bilingual
     # episode transcribes each clip in its own language (forcing the episode
@@ -263,8 +293,7 @@ def run_pipeline(
         for i, clip in enumerate(clips, 1):
             slug = _slug(clip.title)
             stem = f"reel_{i:02d}_{slug}"
-            clip_cache = cache / stem
-            clip_cache.mkdir(parents=True, exist_ok=True)
+            clip_cache = clip_cache_dir(cache, meta.path, clip, cfg)
 
             progress.update(task_id, description=f"[{i}/{len(clips)}] {clip.title[:40]}")
 
@@ -280,6 +309,10 @@ def run_pipeline(
                 words_cache = clip_cache / "words.json" if use_cache else None
                 segment_start = max(0, clip.start - cfg.clip_extract.pad_seconds)
                 segment_end = min(meta.duration, clip.end + cfg.clip_extract.pad_seconds)
+                write_json(clip_cache / "clip.json", {
+                    "clip": asdict(clip), "stem": stem, "source": str(meta.path.resolve()),
+                    "source_start": segment_start, "source_end": segment_end,
+                })
                 reference_words = [
                     Word(max(0, w.start - segment_start), min(segment_end, w.end) - segment_start,
                          w.text, w.confidence)
@@ -287,66 +320,94 @@ def run_pipeline(
                     if w.start < segment_end and w.end > segment_start
                 ] if transcript is not None else None
 
-                per_frame_persons: list[list] = []
+                cropped_path = clip_cache / "cropped.mp4"
+                metrics_path = clip_cache / "crop_metrics.json"
+                crop_key = crop_inputs(segment_path, cfg)
+                reuse_crop = use_cache and checkpoint_matches(cropped_path, crop_key) and metrics_path.exists()
+                if reuse_crop:
+                    metrics = json.loads(metrics_path.read_text())
+                    log.info("Reusing completed crop: %s", cropped_path)
+                else:
+                    scene_plan = review_scenes(segment_path, cfg, clip_cache / "scenes.json",
+                                               provider=provider, use_cache=use_cache)
+                    if crop_mode == "auto":
+                        per_frame_persons, _, clip_fps, clip_w, clip_h = detect_humans_all_per_frame(segment_path, cfg)
+                        per_frame = [max(ps, key=lambda b: b.area) if ps else None for ps in per_frame_persons]
+                        if getattr(cfg.crop, "comedy_mode", False):
+                            is_wide = [False] * len(per_frame_persons)
+                        else:
+                            is_wide = classify_wide_shot_frames(
+                                per_frame_persons, source_width=clip_w, source_height=clip_h,
+                                sep_threshold_frac=cfg.crop.shot_sep_frac,
+                                height_cap_frac=cfg.crop.shot_height_cap_frac,
+                                smooth_window_frames=cfg.crop.shot_smooth_window_frames,
+                                min_dwell_frames=cfg.crop.shot_min_dwell_frames,
+                                min_person_frac=cfg.crop.shot_min_person_frac,
+                            )
+                        smart_crop_916_stacked(segment_path, per_frame_persons, is_wide, cropped_path, cfg,
+                                               scene_plan=scene_plan)
+                    else:
+                        per_frame, clip_fps, clip_w, clip_h = detect_humans_per_frame(segment_path, cfg)
+                        timeline = build_speaker_timeline(
+                            per_frame_bboxes=per_frame, clip_duration=len(per_frame) / clip_fps,
+                            fps=clip_fps, source_width=clip_w, source_height=clip_h,
+                            diar_segments=_maybe_diarize(segment_path, cfg), cfg=cfg, video_path=segment_path,
+                        )
+                        timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
+                        smart_crop_916(segment_path, timeline, cropped_path, cfg, scene_plan=scene_plan)
+                    metrics = {
+                        "duration": len(per_frame) / clip_fps,
+                        "face_hits": sum(b is not None for b in per_frame),
+                        "total_frames": len(per_frame),
+                        "x_centers": [b.x_center for b in per_frame if b is not None],
+                        "source_width": clip_w,
+                    }
+                    write_json(metrics_path, metrics)
+                    if scene_plan is None or not any(shot.get("review_error") for shot in scene_plan.shots):
+                        checkpoint(cropped_path, crop_key)
+                    else:
+                        cropped_path.with_suffix(".mp4.checkpoint.json").unlink(missing_ok=True)
+                        log.warning("Source framing was preserved after a vision error; the next render will retry scene review")
 
-                if crop_mode == "auto":
-                    per_frame_persons, _per_frame_has_face, clip_fps, clip_w, clip_h = (
-                        detect_humans_all_per_frame(segment_path, cfg)
-                    )
+                if scribe:
+                    words = scribe.clip_words(segment_path, transcript, segment_start, segment_end, clip_cache,
+                                              caption_start=clip.start, caption_end=clip.end)
+                else:
+                    asr_key = asr_inputs(segment_path, cfg)
+                    if words_cache and words_cache.exists() and not checkpoint_matches(words_cache, asr_key):
+                        words_cache.unlink()
+                    if words_cache and not words_cache.exists():
+                        reused_words = reuse_containing_words(cache, meta.path, segment_start, segment_end, cfg)
+                        if reused_words:
+                            write_json(words_cache, reused_words)
+                            log.info("Reusing parent clip's timed words for this trim")
                     words = transcribe_second_pass_cached(segment_path, words_cache, cfg,
                                                           reference_words=reference_words)
-                    per_frame = [
-                        max(ps, key=lambda b: b.area) if ps else None
-                        for ps in per_frame_persons
-                    ]
+                    if words_cache:
+                        checkpoint(words_cache, asr_key)
+                        write_json(clip_cache / "words.provenance.json",
+                                   word_provenance(meta.path, segment_start, segment_end, words_cache, cfg))
+                cleaned_path = clip_cache / "caption_words.json"
+                cleanup_key = caption_inputs(segment_path, words, cfg)
+                if use_cache and checkpoint_matches(cleaned_path, cleanup_key):
+                    words = [Word(**w) for w in json.loads(cleaned_path.read_text())]
+                    log.info("Reusing cleaned caption words: %s", cleaned_path)
                 else:
-                    # DEPRECATED `crop.mode: single` branch.
-                    per_frame, clip_fps, clip_w, clip_h = detect_humans_per_frame(segment_path, cfg)
-                    with ThreadPoolExecutor(max_workers=2) as ex:
-                        f_words = ex.submit(transcribe_second_pass_cached, segment_path, words_cache, cfg,
-                                            reference_words=reference_words)
-                        f_diar = ex.submit(_maybe_diarize, segment_path, cfg)
-                        words = f_words.result()
-                        diar_segments = f_diar.result()
+                    words = cleanup_words(words, provider, cfg,
+                                          cache_dir=clip_cache / "cleanup" if use_cache else None)
+                    write_json(cleaned_path, [asdict(w) for w in words])
+                    checkpoint(cleaned_path, cleanup_key)
 
-                words = cleanup_words(words, provider, cfg)
-
-                clip_duration = len(per_frame) / clip_fps if clip_fps else (clip.duration + 2 * cfg.clip_extract.pad_seconds)
-
-                cropped_path = clip_cache / "cropped.mp4"
-                if crop_mode == "auto":
-                    if getattr(cfg.crop, "comedy_mode", False):
-                        is_wide = [False] * len(per_frame_persons)
-                    else:
-                        is_wide = classify_wide_shot_frames(
-                            per_frame_persons,
-                            source_width=clip_w,
-                            source_height=clip_h,
-                            sep_threshold_frac=getattr(cfg.crop, "shot_sep_frac", 0.20),
-                            height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
-                            smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
-                            min_dwell_frames=getattr(cfg.crop, "shot_min_dwell_frames", 0),
-                            min_person_frac=getattr(cfg.crop, "shot_min_person_frac", 0.20),
-                        )
-                    smart_crop_916_stacked(
-                        segment_path, per_frame_persons, is_wide, cropped_path, cfg,
-                    )
-                else:
-                    timeline = build_speaker_timeline(
-                        per_frame_bboxes=per_frame,
-                        clip_duration=clip_duration,
-                        fps=clip_fps,
-                        source_width=clip_w,
-                        source_height=clip_h,
-                        diar_segments=diar_segments,
-                        cfg=cfg,
-                        video_path=segment_path,
-                    )
-                    timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
-                    smart_crop_916(segment_path, timeline, cropped_path, cfg)
-
+                # Apply even to restored cleanup caches; sidecars must match the render.
+                words = normalize_caption_punctuation(words)
+                clip_duration = metrics["duration"]
                 final_path = output_dir / f"{stem}.mp4"
                 burn_subtitles(cropped_path, words, final_path, cfg, title=clip.title)
+                write_json(final_path.with_suffix(".captions.json"), {
+                    "source": str(meta.path.resolve()), "source_start": segment_start,
+                    "clip_start": clip.start, "clip_end": clip.end,
+                    "words": [asdict(w) for w in words],
+                })
 
                 if music_lib is not None:
                     try:
@@ -368,19 +429,11 @@ def run_pipeline(
                     f"hook_score: {clip.hook_score:.2f}\n"
                 )
 
-                non_null = sum(1 for b in per_frame if b is not None)
-                x_centers = [b.x_center for b in per_frame if b is not None]
                 scorecard = evaluate_reel(
-                    title=clip.title,
-                    words=words,
-                    clip_duration=clip_duration,
-                    face_hits=non_null,
-                    total_frames=len(per_frame),
-                    person_frames=non_null,
-                    x_centers=x_centers,
-                    source_width=clip_w,
-                    provider=provider,
-                    cfg=cfg,
+                    title=clip.title, words=words, clip_duration=clip_duration,
+                    face_hits=metrics["face_hits"], total_frames=metrics["total_frames"],
+                    person_frames=metrics["face_hits"], x_centers=metrics["x_centers"],
+                    source_width=metrics["source_width"], provider=provider, cfg=cfg,
                 )
                 scorecard.write_to(sidecar_path)
 

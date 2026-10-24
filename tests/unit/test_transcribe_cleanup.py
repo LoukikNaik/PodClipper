@@ -1,12 +1,11 @@
-"""Characterization tests for `src/transcribe_cleanup.py`.
+"""Caption corrections preserve timing and fail explicitly after bounded retries.
 
 Module under test: LLM post-pass that fixes Whisper mis-spellings and
 transliterates non-Latin scripts so captions are readable.
 
 Behaviors locked:
   - `_extract_json_array`         — tolerant array parser with fence support.
-  - `cleanup_words`               — all fallback paths (returns input unchanged
-                                    on any failure); happy path with mocked LLM.
+  - `cleanup_words`               — bounded retries and validated mapped corrections.
                                     Preserves word timings while updating text.
 """
 
@@ -53,7 +52,7 @@ def _provider_returning(mocker, raw_response: str):
 
 def _cfg(enabled: bool = True, max_tokens: int | None = 4096) -> SimpleNamespace:
     return SimpleNamespace(
-        llm=SimpleNamespace(max_tokens=32768),
+        llm=SimpleNamespace(max_tokens=32768, endpoint='https://api.example.com/v1', model='test'),
         transcribe=SimpleNamespace(
             cleanup=SimpleNamespace(enabled=enabled, max_tokens_per_call=max_tokens),
         ),
@@ -100,49 +99,48 @@ def test_cleanup_words_returns_input_unchanged_when_word_list_is_empty(mocker) -
     provider.complete.assert_not_called()
 
 
-def test_cleanup_words_returns_original_when_llm_raises_llmerror(mocker) -> None:
-    """LLMError → keep original (karaoke must keep working)."""
+def test_cleanup_words_reports_error_when_llm_retries_are_exhausted(mocker) -> None:
+    """An exhausted network failure must not silently publish raw words."""
     provider = mocker.MagicMock()
     provider.complete.side_effect = LLMError("network died")
     words = _words("hello", "world")
 
-    out = cleanup_words(words, provider, _cfg())
+    with pytest.raises(CleanupError, match='Caption cleanup failed'):
+        cleanup_words(words, provider, _cfg())
+    assert provider.complete.call_count == 2
+    assert [w.text for w in words] == ['hello', 'world']
 
-    assert out is words
 
-
-def test_cleanup_words_returns_original_when_response_is_unparseable(mocker) -> None:
-    """Garbled response → keep original."""
+def test_cleanup_words_reports_error_when_responses_remain_unparseable(mocker) -> None:
+    """Garbled responses exhaust retries and stop caption export."""
     provider = _provider_returning(mocker, "not json at all")
     words = _words("hello", "world")
 
-    out = cleanup_words(words, provider, _cfg())
+    with pytest.raises(CleanupError, match='Caption cleanup failed'):
+        cleanup_words(words, provider, _cfg())
+    assert provider.complete.call_count == 2
 
-    assert out is words
 
-
-def test_cleanup_words_returns_original_when_source_indices_are_missing(mocker) -> None:
+def test_cleanup_words_reports_error_when_source_indices_are_missing(mocker) -> None:
     """Every original word must be covered by the correction mapping."""
     provider = _provider_returning(mocker, json.dumps([
         {"source_indices": [0], "words": ["only_one"]},
     ]))
     words = _words("hello", "world")  # 2 words
 
-    out = cleanup_words(words, provider, _cfg())
+    with pytest.raises(CleanupError):
+        cleanup_words(words, provider, _cfg())
 
-    assert out is words
 
-
-def test_cleanup_words_returns_original_when_corrected_words_are_missing(mocker) -> None:
+def test_cleanup_words_reports_error_when_corrected_words_are_missing(mocker) -> None:
     """Each correction must supply its replacement words."""
     provider = _provider_returning(mocker, json.dumps([
         {"source_indices": [0]}, {"source_indices": [1], "words": ["world"]},
     ]))
     words = _words("hello", "world")
 
-    out = cleanup_words(words, provider, _cfg())
-
-    assert out is words
+    with pytest.raises(CleanupError):
+        cleanup_words(words, provider, _cfg())
 
 
 # --------------------------------------------------------------------------- #
@@ -216,11 +214,32 @@ def test_cleanup_words_splits_a_token_within_its_original_time_span(mocker) -> N
     [{"source_indices": [0, 1], "words": ["two words"]}],
 ])
 def test_cleanup_words_rejects_invalid_mappings(mocker, corrections) -> None:
-    """Invalid mappings preserve the original words and timings."""
+    """Invalid mappings stop export without mutating the original words."""
     provider = _provider_returning(mocker, json.dumps(corrections))
     words = _words("hello", "world")
 
-    assert cleanup_words(words, provider, _cfg()) is words
+    with pytest.raises(CleanupError):
+        cleanup_words(words, provider, _cfg())
+    assert words == _words('hello', 'world')
+
+
+def test_cleanup_retries_only_failed_chunks_and_reuses_completed_chunks(mocker, tmp_path):
+    cfg = _cfg()
+    cfg.transcribe.cleanup.chunk_words = 1
+    provider = mocker.MagicMock()
+    provider.complete.side_effect = [
+        json.dumps([{'source_indices': [0], 'words': ['Hello']}]),
+        LLMError('unavailable'), LLMError('unavailable'),
+        json.dumps([{'source_indices': [0], 'words': ['World']}]),
+    ]
+    words = _words('hello', 'world')
+    with pytest.raises(CleanupError):
+        cleanup_words(words, provider, cfg, cache_dir=tmp_path)
+    assert provider.complete.call_count == 3
+    result = cleanup_words(words, provider, cfg, cache_dir=tmp_path)
+    assert [w.text for w in result] == ['Hello', 'World']
+    assert provider.complete.call_count == 4
+    assert json.loads(provider.complete.call_args.kwargs['user_prompt'])['tokens'] == [{'i': 0, 'w': 'world'}]
 
 
 def test_cleanup_words_uses_shared_token_budget_when_no_cleanup_override(mocker) -> None:

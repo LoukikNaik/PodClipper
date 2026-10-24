@@ -30,7 +30,10 @@ def _title(sidecar: Path, stem: str) -> str:
     return stem.replace("_", " ")
 
 
-def _transcript(stem: str) -> str:
+def _transcript(stem: str, reel: Path = None) -> str:
+    if reel is not None and reel.with_suffix(".captions.json").exists():
+        words = json.loads(reel.with_suffix(".captions.json").read_text())["words"]
+        return " ".join((w.get("text") or "").strip() for w in words)
     hits = list(Path(".cache").glob(f"*/{stem}/words.json"))
     if not hits:
         return ""
@@ -61,7 +64,7 @@ def main() -> int:
     for mp4 in reels:
         stem = mp4.stem
         title = _title(a.reels_dir / f"{stem}.txt", stem)
-        transcript = _transcript(stem)
+        transcript = _transcript(stem, mp4)
         if not transcript:
             print(f"  {stem}: no transcript cache — skipped"); continue
         track = select_track(title, transcript, lib, provider, cfg)

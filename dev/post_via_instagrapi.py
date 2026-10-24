@@ -89,7 +89,9 @@ def _locate_words_json(reel_slug: str) -> Optional[Path]:
 
 def _transcript_from_words(path: Path) -> str:
     words = json.loads(path.read_text())
-    return "".join(w.get("text", "") for w in words if isinstance(w, dict)).strip()
+    if isinstance(words, dict):
+        words = words["words"]
+    return " ".join(w.get("text", "").strip() for w in words if isinstance(w, dict)).strip()
 
 
 def _extract_json_object(text: str) -> dict:
@@ -134,7 +136,8 @@ def generate_caption(reel_path: Path, cfg, log) -> str:
     title = meta.get("title") or slug
     reason = meta.get("reason", "")
 
-    words_path = _locate_words_json(slug)
+    captions = reel_path.with_suffix(".captions.json")
+    words_path = captions if captions.exists() else _locate_words_json(slug)
     if words_path is None:
         log.warning(f"no words.json found for slug {slug!r}; caption will lean on title alone")
         transcript = ""

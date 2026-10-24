@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,8 +23,8 @@ class AnalyzeError(Exception):
     pass
 
 
-def _load_prompt(min_s: int, max_s: int, target: int) -> str:
-    template = load_prompt("reel_detector.txt")
+def _load_prompt(min_s: int, max_s: int, target: int, *, comedy: bool = False) -> str:
+    template = load_prompt("comedy_detector.txt" if comedy else "reel_detector.txt")
     return (
         template
         .replace("{{MIN}}", str(min_s))
@@ -121,6 +122,9 @@ def _review_clip_with_llm(
     reason: str,
     provider: LLMProvider,
     max_tokens: int = 16384,
+    *,
+    latin_title: bool = False,
+    comedy: bool = False,
 ) -> tuple[str | None, dict]:
     """Review the exact cut and title; never retain an unreviewed title on failure."""
     trace: dict = {"from": long_title, "attempts": []}
@@ -131,13 +135,18 @@ def _review_clip_with_llm(
         "Review this exact cut and return the JSON decision."
     )
     retry_prompt = user_prompt
+    review_system = _CLIP_REVIEW_SYSTEM
+    if comedy:
+        review_system += "\n" + load_prompt("comedy_context.txt")
+    if latin_title:
+        review_system += "\nWrite the title in English or Romanized Hinglish using Latin letters, even when the evidence is in Hindi script."
     try:
         for attempt in range(2):
             attempt_trace: dict = {"attempt": attempt + 1}
             trace["attempts"].append(attempt_trace)
             response = provider.complete(
                 user_prompt=retry_prompt,
-                system_prompt=_CLIP_REVIEW_SYSTEM,
+                system_prompt=review_system,
                 max_tokens=max_tokens,
             )
             trace["llm_raw_response"] = attempt_trace["llm_raw_response"] = response
@@ -169,14 +178,17 @@ def _review_clip_with_llm(
                 if " ".join(evidence.split()) not in evidence_text:
                     raise ValueError(f"{field} is not inside the final cut")
             word_count = len(candidate.split())
+            script_ok = not latin_title or not any(
+                ch.isalpha() and "LATIN" not in unicodedata.name(ch, "") for ch in candidate)
             attempt_trace.update(title_characters=len(candidate), title_words=word_count)
             if not candidate or word_count < 3:
                 raise ValueError("title must be 3-7 words and at most 38 characters")
-            if len(candidate) <= _TITLE_HARD_MAX and word_count <= 7:
+            if len(candidate) <= _TITLE_HARD_MAX and word_count <= 7 and script_ok:
                 attempt_trace["outcome"] = "accepted"
                 break
             if attempt == 1:
-                raise ValueError("shortened title still exceeds 38 characters or 7 words")
+                raise ValueError("title is not in Latin script" if not script_ok else
+                                 "shortened title still exceeds 38 characters or 7 words")
             attempt_trace["outcome"] = "title_too_long"
             log.info(
                 f"Retrying title for {long_title!r}: "
@@ -194,6 +206,7 @@ def _review_clip_with_llm(
                 "qualifications just to fit. Recheck the unchanged clip and "
                 "the new title against its transcript. Return the full review "
                 "JSON with evidence for the new title, or reject if unsupported."
+                + (" Use English or Romanized Hinglish with Latin letters only." if latin_title else "")
             )
     except (LLMError, ValueError, TypeError, KeyError) as e:
         log.warning(f"Final review failed for {long_title!r} ({e}); skipping clip")
@@ -330,6 +343,8 @@ def refine_clip_bounds_with_llm(
     system_prompt = (_load_reel_refiner_prompt()
                      .replace("{{MIN}}", str(cfg.analyze.min_clip_seconds))
                      .replace("{{MAX}}", str(cfg.analyze.max_clip_seconds)))
+    if getattr(getattr(cfg, "crop", None), "comedy_mode", False):
+        system_prompt += "\n" + load_prompt("comedy_context.txt")
     trace["llm_user_prompt"] = user_prompt
 
     try:
@@ -447,19 +462,29 @@ def analyze_for_reels(
     provider: LLMProvider,
     cfg: SimpleNamespace,
     debug_cache_dir: "Path | None" = None,
+    excluded_ranges: list | None = None,
 ) -> list[Clip]:
     """Select, refine, validate, and title distinct podcast clips."""
     min_s = cfg.analyze.min_clip_seconds
     max_s = cfg.analyze.max_clip_seconds
     target = cfg.analyze.target_clips
 
-    system_prompt = _load_prompt(min_s, max_s, target)
+    comedy = bool(getattr(getattr(cfg, "crop", None), "comedy_mode", False))
+    system_prompt = _load_prompt(min_s, max_s, target, comedy=comedy)
+    latin_titles = (getattr(getattr(getattr(cfg, "transcribe", None), "scribe", None), "enabled", False)
+                    and cfg.transcribe.cleanup.transliterate)
+    if latin_titles:
+        system_prompt += "\nWrite titles in English or Romanized Hinglish using Latin letters, even when the transcript is in Hindi script."
     user_prompt = transcript_to_timestamped_text(
         transcript,
         resolution=cfg.analyze.transcript_timestamp_resolution,
     )
     if not user_prompt.strip():
         raise AnalyzeError("empty transcript — nothing to analyze")
+    if excluded_ranges:
+        user_prompt = ("The following source ranges have unresolved transcription issues. "
+                       "No selected clip may overlap any of them (numeric seconds): "
+                       + json.dumps(excluded_ranges) + "\n\nTranscript:\n" + user_prompt)
 
     log.info(
         f"Sending transcript to LLM ({provider.name}): "
@@ -491,6 +516,9 @@ def analyze_for_reels(
             continue
         c = _coerce_clip(raw, video_duration, min_s, max_s)
         if c is None:
+            continue
+        if any(c.start < b and c.end > a for a, b in excluded_ranges or []):
+            log.warning("Dropping candidate overlapping unreliable source speech: %s", c.title)
             continue
 
         new_start, new_end = _snap_to_segment_boundaries(
@@ -553,12 +581,27 @@ def analyze_for_reels(
         "after_refine": [_clip_to_dict(c) for c in eligible],
     })
 
+    if comedy:
+        all_words = sorted((w for seg in transcript.segments for w in seg.words), key=lambda w: w.start)
+        reaction_seconds = max(0.0, float(getattr(cfg.analyze, "comedy_reaction_seconds", 2.0)))
+        with_reactions = []
+        for c in eligible:
+            next_start = next((w.start for w in all_words if w.start >= c.end), video_duration)
+            end = max(c.end, min(c.end + reaction_seconds, next_start - 0.10,
+                                 c.start + max_s, video_duration))
+            with_reactions.append(Clip(start=c.start, end=end, title=c.title,
+                                       reason=c.reason, hook_score=c.hook_score))
+        eligible = with_reactions
+
     clips = []
     reviews: list[dict] = []
     title_rewrites: list[dict] = []
     for c in eligible:
         if len(clips) >= target:
             break
+        if any(c.start < b and c.end > a for a, b in excluded_ranges or []):
+            log.warning("Dropping refined clip overlapping unreliable source speech: %s", c.title)
+            continue
         if any(min(c.end, kept.end) > max(c.start, kept.start) for kept in clips):
             log.info(f"Dropping overlapping clip: {c.title!r}")
             continue
@@ -567,7 +610,9 @@ def analyze_for_reels(
             log.warning(f"No exact transcript evidence for {c.title!r}; skipping clip")
             reviews.append({"from": c.title, "outcome": "review_failed", "error": "no exact transcript"})
             continue
-        short, review = _review_clip_with_llm(c.title, excerpt, c.reason, provider, cfg.llm.max_tokens)
+        short, review = _review_clip_with_llm(c.title, excerpt, c.reason, provider, cfg.llm.max_tokens,
+                                             **({"latin_title": True} if latin_titles else {}),
+                                             **({"comedy": True} if comedy else {}))
         review["start"], review["end"] = c.start, c.end
         reviews.append(review)
         if short is None:

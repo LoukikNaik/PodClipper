@@ -58,7 +58,40 @@ def _resolve(raw: dict, overrides: dict) -> SimpleNamespace:
         raise ValueError("llm.num_retries must be a nonnegative integer")
     if llm["timeout_seconds"] <= 0 or isinstance(llm["timeout_seconds"], bool):
         raise ValueError("llm.timeout_seconds must be greater than zero")
+    scribe = merged["transcribe"]["scribe"]
+    if type(scribe["source_repair_max_windows"]) is not int or not 1 <= scribe["source_repair_max_windows"] <= 256:
+        raise ValueError("transcribe.scribe.source_repair_max_windows must be an integer between 1 and 256")
+    if scribe["tag_audio_events"] is not None and type(scribe["tag_audio_events"]) is not bool:
+        raise ValueError("transcribe.scribe.tag_audio_events must be null or boolean")
+    fraction = scribe["max_unreliable_fraction"]
+    if isinstance(fraction, bool) or not isinstance(fraction, (int, float)) or not 0 <= fraction <= .25:
+        raise ValueError("transcribe.scribe.max_unreliable_fraction must be between zero and 0.25")
+    for key in ("chunk_seconds", "overlap_seconds", "timeout_seconds"):
+        if isinstance(scribe[key], bool) or not math.isfinite(scribe[key]):
+            raise ValueError(f"transcribe.scribe.{key} must be finite")
+    if not 10 <= scribe["chunk_seconds"] <= 300:
+        raise ValueError("transcribe.scribe.chunk_seconds must be between 10 and 300")
+    if not 0 <= scribe["overlap_seconds"] < scribe["chunk_seconds"] / 2:
+        raise ValueError("transcribe.scribe.overlap_seconds must be nonnegative and less than half a chunk")
+    if scribe["timeout_seconds"] <= 0 or type(scribe["max_attempts"]) is not int or not 1 <= scribe["max_attempts"] <= 5:
+        raise ValueError("Scribe timeout must be positive and max_attempts must be between 1 and 5")
     repair = merged["transcribe"]["caption_repair"]
+    second_pass = merged["transcribe"]["second_pass"]
+    if second_pass["task"] not in ("transcribe", "translate"):
+        raise ValueError("transcribe.second_pass.task must be transcribe or translate")
+    prompt = second_pass["initial_prompt"]
+    if prompt is not None and (not isinstance(prompt, str) or len(prompt) > 300):
+        raise ValueError("transcribe.second_pass.initial_prompt must be null or a string up to 300 characters")
+    for key in ("max_attempts", "chunk_words"):
+        value = merged["transcribe"]["cleanup"][key]
+        if type(value) is not int or value < 1:
+            raise ValueError(f"transcribe.cleanup.{key} must be a positive integer")
+    timeout = merged["subtitles"]["encoder_timeout_seconds"]
+    if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("subtitles.encoder_timeout_seconds must be finite and positive")
+    preset = merged["subtitles"]["ffmpeg_preset"]
+    if preset is not None and (not isinstance(preset, str) or not preset.strip()):
+        raise ValueError("subtitles.ffmpeg_preset must be null or a nonempty string")
     for key in ("window_seconds", "min_speech_seconds", "min_words_per_speech_second",
                 "max_word_seconds", "max_retry_seconds", "reference_ratio"):
         if isinstance(repair[key], bool) or not math.isfinite(repair[key]) or repair[key] <= 0:
@@ -71,6 +104,9 @@ def _resolve(raw: dict, overrides: dict) -> SimpleNamespace:
         raise ValueError("transcribe.caption_repair.max_retry_seconds must exceed twice the nonnegative context_seconds")
     if repair["reference_ratio"] > 1:
         raise ValueError("transcribe.caption_repair.reference_ratio must be at most one")
+    reaction = merged["analyze"]["comedy_reaction_seconds"]
+    if isinstance(reaction, bool) or not isinstance(reaction, (int, float)) or not math.isfinite(reaction) or reaction < 0:
+        raise ValueError("analyze.comedy_reaction_seconds must be finite and nonnegative")
     dividers = merged["crop"]["panel_dividers"]
     cuts = merged["crop"]["scene_cuts"]
     identity = merged["crop"]["face_identity"]

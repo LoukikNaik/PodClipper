@@ -12,6 +12,15 @@ audio:
   chunk_overlap_seconds: 10      # overlap for boundary safety
 
 transcribe:
+  scribe:
+    source_repair_max_windows: 64 # bounded section retries per full-source chunk; reel captions use caption_repair.max_windows
+    tag_audio_events: null       # null: detect laughter/applause in comedy mode; bool overrides
+    max_unreliable_fraction: 0.05 # exclude small unresolved source gaps after repairs; exported clips stay strict
+    enabled: false
+    chunk_seconds: 300.0
+    overlap_seconds: 4.0
+    timeout_seconds: 90.0
+    max_attempts: 2
   engine: faster                 # faster (default, faster-whisper CPU/CUDA — best
                                  # word recall on fast code-switched Hindi/English) |
                                  # mlx (Apple-Silicon GPU). CLI: --whisper-engine
@@ -40,6 +49,8 @@ transcribe:
     device: auto
     beam_size: 5                 # accuracy matters more here (subtitles)
     word_timestamps: true
+    task: transcribe
+    initial_prompt: null
   caption_repair:
     enabled: true
     window_seconds: 6.0
@@ -53,6 +64,8 @@ transcribe:
     reference_min_words: 4
     reference_ratio: 0.35
   cleanup:                       # LLM post-processing of second-pass words
+    max_attempts: 2
+    chunk_words: 60
     enabled: true
     transliterate: true          # romanize non-Latin scripts (Hindi, Urdu, Arabic, ...)
     fix_spelling: true           # correct obvious whisper mis-transcriptions
@@ -83,6 +96,7 @@ output:
   intro_zoom: false
 
 analyze:
+  comedy_reaction_seconds: 2.0  # maximum non-speech tail after a stand-up punchline
   min_clip_seconds: 15
   max_clip_seconds: 90
   target_clips: 8                # hint to the LLM; it may return fewer/more
@@ -215,6 +229,8 @@ crop:
     max_zoom: 1.35                # starting zoom factor (1.0 = no zoom)
 
 subtitles:
+  ffmpeg_preset: null
+  encoder_timeout_seconds: 600
   style: "classic"               # "classic" = current karaoke line; "pop" = 1-2 huge words at a time
   font_name: "Arial"
   font_size: 72

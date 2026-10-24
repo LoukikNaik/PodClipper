@@ -10,8 +10,11 @@ podcast-to-reels flow.
 podclipper "podcast.mp4"
 ```
 
-Video and audio processing run locally. One configured LLM endpoint handles
-clip selection, title review, caption correction, and content scoring.
+Video and audio processing run locally by default. Experimental `--scribe`
+uploads audio for hosted transcription. One configured, vision-capable LLM
+endpoint handles clip selection, title review, caption correction, content
+scoring, and source-shot review. Transcripts and representative source frames
+are sent to that endpoint.
 
 [Watch the demo](https://podclipper.loukik.dev)
 
@@ -117,11 +120,43 @@ For podcasts with edited split screens, the cropper detects thin light/dark
 vertical divider lines and keeps each crop inside its source panel. It shows at
 most two views, resets framing when the panel layout changes, and excludes the
 divider itself. Stacked views fill the frame. Detected camera and column changes reset
-tracking to a fresh crop, even for the same person, with a brief crossfade and
+tracking to a fresh crop, even for the same person, with a 0.24-second crossfade and
 no added zoom animation. Advanced overrides are under `crop.panel_dividers` and
 `crop.scene_cuts`; set `crop.scene_cuts.crossfade_seconds: 0` for hard cuts.
 Choosing views uses visible person size, not active-speaker
 identification. Faint, broken, or decorative dividers may not be recognized.
+
+Before cropping, a local cut detector splits each selected clip into source
+shots, including abrupt cuts and short dissolves. The same LLM reviews up to
+three sample frames per shot and classifies it as speaker, audience, other,
+or uncertain. Up to three shots share a request, and successful decisions are
+cached in the clip's `scenes.json`; there is no LLM call per video frame.
+Audience, contextual, and uncertain shots retain the entire source picture
+on a blurred background that fills the vertical canvas. Speaker framing starts
+fresh at the next speaker shot. Missed cuts and ambiguous compositions remain
+limitations, so this is not a guarantee of perfect scene classification.
+
+Local YuNet face detection and SFace recognition keep background people out
+of the speaker candidates and require distinct faces before stacking. The
+renderer also checks that each intended face remains visible in its actual
+crop; duplicate or unverifiable stacked views fall back to one view. No
+names or face database are needed, and recognition features stay in memory.
+The approximately 39 MB of face models download on first use and are reused
+from `~/.cache/podclipper/models/`. Internal overrides live under
+`crop.face_identity` and `crop.scene_review`, without expanding the starter
+config. A model without image support cannot classify shots: failed vision
+requests retain full-source framing and are retried on the next render.
+Within a continuous speaker shot, single-face framing holds the selected
+person while their body box still matches. Required subject/layout changes
+crossfade instead of snapping between crops.
+
+Normal transcription behavior is unchanged. For a targeted retry, internal
+overrides can set `transcribe.language`, `transcribe.vad_filter`, and
+`transcribe.second_pass.task` (`transcribe` or English `translate`),
+`beam_size`, and a short `initial_prompt` vocabulary hint. These settings
+invalidate only the affected transcription/cleanup cache, preserving the crop.
+Translation word timings are approximate and still require coverage and
+caption review before posting.
 
 ## Everyday commands
 
@@ -154,6 +189,46 @@ podclipper podcast.mp4 --selection outputs/<timestamp>/selection.json
 
 Use the same source video. Saved titles, order, and cut boundaries are preserved;
 per-clip transcription, cropping, captions, and evaluation still run normally.
+
+### Experimental: transcribe once with Scribe
+
+With an OpenRouter connection already set in `.env`, opt in per run:
+
+```bash
+podclipper podcast.mp4 --scribe --clips 3
+```
+
+Scribe v2 transcribes the source in resumable overlapping chunks. The LLM
+selects clips from that transcript, and captions reuse the same word timestamps;
+the normal per-clip Whisper pass is skipped. Captions follow the selected cut
+bounds, excluding neighboring words in the extraction buffer. Speech-coverage checks still run
+and retry only problematic sections with Scribe. Caption cleanup/romanization,
+framing, and export remain unchanged. Scribe produces transcription, not English
+translation of all Hindi speech.
+
+This uploads audio to OpenRouter/ElevenLabs and incurs transcription charges.
+It uses the same `LLM_ENDPOINT=https://openrouter.ai/api/v1` and `LLM_API_KEY`;
+your shared `LLM_MODEL` still handles selection and cleanup. No extra credentials
+are needed. Whisper remains the default when the flag is omitted.
+
+`--scribe` also works with `--select-only` and `--selection`; pass it on both
+commands to reuse the full transcript when exporting saved picks. `--limit-minutes`
+limits source transcription too. Successful chunks are cached separately from
+Whisper and resumed on rerun; `--no-cache` repeats paid requests.
+
+Advanced config can enable it with `transcribe.scribe.enabled: true` and override
+`chunk_seconds` (10–300), `overlap_seconds`, `timeout_seconds`, and `max_attempts`.
+These options are omitted from the minimal starter config.
+
+Full-source chunks can use up to 64 section repairs (`source_repair_max_windows`).
+If small speech gaps remain, podcast and comedy selection excludes them with
+surrounding context and keeps successful repairs. Processing still stops when
+unresolved speech exceeds 5% of a source chunk (`max_unreliable_fraction`);
+set that limit to zero to require complete source coverage. Exported reel
+captions must still pass the strict coverage checks.
+
+See [the transcription experiments](docs/experiments/openrouter-transcription.md)
+for quality observations, pricing, and limitations.
 
 ## Small config, sensible defaults
 
@@ -288,8 +363,32 @@ for initial transcription and `large-v3` per clip. Apple Silicon users can opt
 into `--whisper-engine mlx`; it falls back to faster-whisper if unavailable.
 Whisper, YOLO, and MediaPipe models download automatically on first use.
 
-Trailer and comedy options remain available under advanced help. The main
-onboarding and examples above focus on podcast reels.
+### Stand-up comedy
+
+Use the same setup and API key with a downloaded stand-up set:
+
+```bash
+podclipper standup.mp4 --type comedy --clips 3
+# Optional API transcription instead of local Whisper
+podclipper standup.mp4 --type comedy --scribe --clips 3
+```
+
+Comedy mode selects complete jokes with their setup and punchline, uses a
+comedy rubric for review, and keeps a single performer crop. Audience shots
+keep the source composition. A short non-speech tail preserves some reaction
+before the next spoken line; override `analyze.comedy_reaction_seconds` in YAML
+(default: 2 seconds). Review delivery, captions, and joke boundaries before
+posting: transcript review cannot judge whether a performance is funny.
+If the source already has burned-in captions, use a clean source or remove
+its caption border before running; PodClipper does not automatically erase
+existing subtitles.
+With `--scribe`, comedy mode also detects laughter/applause events. These do
+not become caption words, and confirmed gaps between spoken words are excluded
+from missing-speech checks. Internal override: `transcribe.scribe.tag_audio_events`.
+The source-gap exclusion and strict final-caption checks described above also
+apply to comedy mode.
+
+Trailer options remain available under advanced help.
 
 Full defaults: [src/podclipper/config/default.yaml](src/podclipper/config/default.yaml).
 Developer notes: [CLAUDE.md](CLAUDE.md). Local crop iteration:
@@ -359,3 +458,14 @@ See [the release guide](docs/RELEASING.md) for one-time PyPI setup and the exact
 commands. A new `vX.Y.Z` tag publishes version `X.Y.Z` automatically; there is
 no version number to edit in the code. Existing published versions and tags
 must not be reused for new fixes.
+
+### Retrying a clip
+
+Re-running a saved selection reuses completed crop and caption stages when their
+source, clip bounds, and settings still match. A caption encoder failure does not
+require repeating transcription or cropping. Trimmed clips can reuse timed words
+from a containing clip; speech coverage is checked again before export.
+
+Each exported reel includes a `.captions.json` sidecar with the exact cleaned
+words used on screen and their source offset. Failed caption cleanup is retried
+in small chunks; it is reported as an error instead of silently burning raw text.

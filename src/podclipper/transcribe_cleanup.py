@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
+from dataclasses import asdict
+from pathlib import Path
 from types import SimpleNamespace
 
 from .llm import LLMError, LLMProvider
 from .types import Word
+from .render_cache import checkpoint, checkpoint_matches, fingerprint, write_json
 
 log = logging.getLogger("ave.cleanup")
 
@@ -26,7 +30,8 @@ You may merge adjacent tokens wrongly split by transcription, or split a
 wrongly combined token. Do not expand contractions, normalize grammar,
 translate, paraphrase, or invent speech. Use surrounding words as context.
 When transliteration is enabled, romanize non-Latin script naturally;
-keep the original language and meaning. Otherwise preserve its script.
+keep the original language and meaning. Use Latin punctuation for romanized
+text (replace Hindi danda । or ॥ with a period). Otherwise preserve its script.
 Leave uncertain words and names unchanged; do not guess a person's identity.
 Preserve punctuation and sensible capitalization. When splitting, put
 trailing punctuation on the last word. Each output word must be one token.
@@ -57,12 +62,12 @@ def _extract_json_array(text: str) -> list:
     return json.loads(text[first : last + 1])
 
 
-def cleanup_words(
+def _cleanup_chunk(
     words: list[Word],
     provider: LLMProvider,
     cfg: SimpleNamespace,
 ) -> list[Word]:
-    """Correct mapped caption words; preserve the original list on invalid output."""
+    """Correct one caption chunk and reject incomplete or invalid mappings."""
     cleanup_cfg = getattr(cfg.transcribe, "cleanup", None)
     if cleanup_cfg is None or not bool(cleanup_cfg.enabled):
         return words
@@ -87,14 +92,12 @@ def cleanup_words(
             max_tokens=int(getattr(cleanup_cfg, "max_tokens_per_call", None) or cfg.llm.max_tokens),
         )
     except LLMError as e:
-        log.warning(f"cleanup LLM call failed ({e}); keeping raw words")
-        return words
+        raise CleanupError(f"cleanup LLM call failed: {e}") from e
 
     try:
         fixed = _extract_json_array(response)
     except (json.JSONDecodeError, CleanupError) as e:
-        log.warning(f"cleanup returned unparseable JSON ({e}); keeping raw words")
-        return words
+        raise CleanupError(f"cleanup returned unparseable JSON: {e}") from e
 
     out: list[Word] = []
     next_index = 0
@@ -132,7 +135,49 @@ def cleanup_words(
         if next_index != len(words):
             raise CleanupError("corrections do not cover all original words")
     except (CleanupError, TypeError, ValueError) as e:
-        log.warning(f"cleanup mapping invalid ({e}); keeping raw words")
-        return words
+        raise CleanupError(f"cleanup mapping invalid: {e}") from e
+    if transliterate and any(
+        unicodedata.category(c).startswith("L") and "LATIN" not in unicodedata.name(c, "")
+        for word in out for c in word.text
+    ):
+        raise CleanupError("caption cleanup left non-Latin letters despite requested romanization")
     log.info(f"Cleanup: {len(words)} original words → {len(out)} caption words")
     return out
+
+
+def cleanup_words(words: list[Word], provider: LLMProvider, cfg: SimpleNamespace,
+                  *, cache_dir: Path | None = None) -> list[Word]:
+    """Retry only failed caption chunks; never silently publish failed cleanup."""
+    options = getattr(cfg.transcribe, "cleanup", None)
+    if not words or options is None or not options.enabled:
+        return words
+    attempts = max(1, int(getattr(options, "max_attempts", 2)))
+    chunk_size = max(1, int(getattr(options, "chunk_words", 60)))
+    cleaned = []
+    for start in range(0, len(words), chunk_size):
+        chunk = words[start:start + chunk_size]
+        inputs = [[asdict(w) for w in chunk], options, cfg.llm.endpoint, cfg.llm.model]
+        cached = cache_dir / (fingerprint(inputs) + ".json") if cache_dir is not None else None
+        if cached is not None:
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            if checkpoint_matches(cached, inputs):
+                try:
+                    restored = [Word(**w) for w in json.loads(cached.read_text())]
+                    cleaned.extend(restored)
+                    continue
+                except (OSError, TypeError, ValueError):
+                    pass
+        for attempt in range(1, attempts + 1):
+            try:
+                fixed = _cleanup_chunk(chunk, provider, cfg)
+                if cached is not None:
+                    write_json(cached, [asdict(w) for w in fixed])
+                    checkpoint(cached, inputs)
+                cleaned.extend(fixed)
+                break
+            except CleanupError as exc:
+                log.warning("Caption cleanup words %d–%d, attempt %d/%d: %s",
+                            start, start + len(chunk), attempt, attempts, exc)
+                if attempt == attempts:
+                    raise CleanupError(f"Caption cleanup failed for words {start}–{start + len(chunk)}") from exc
+    return cleaned

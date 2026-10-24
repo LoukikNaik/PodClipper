@@ -19,6 +19,11 @@ _SAMPLE_RATE = 16000
 class CaptionCoverageError(RuntimeError):
     """Caption speech coverage remains unreliable after local retries."""
 
+    def __init__(self, message, *, words=None, remaining_issues=None):
+        super().__init__(message)
+        self.words = list(words) if words is not None else None
+        self.remaining_issues = list(remaining_issues or [])
+
 
 def _speech_regions(audio: np.ndarray) -> list[tuple[float, float]]:
     """Return unpadded speech regions using the bundled Silero detector."""
@@ -125,11 +130,16 @@ def _splice(words, replacement, start, end):
     return [w for w in words if w.end <= start] + selected + [w for w in words if w.start >= end]
 
 
-def repair_caption_words(audio, words, cfg, transcribe_window, *, reference_words=None, report_path=None):
+def repair_caption_words(audio, words, cfg, transcribe_window, *, reference_words=None, report_path=None,
+                         non_speech_regions=None):
     """Retry suspicious speech windows; fail before export if coverage stays unreliable."""
     duration = len(audio) / _SAMPLE_RATE
     reference = reference_words or []
+    excluded = _merge_ranges(non_speech_regions or [])
+    if any(not math.isfinite(a) or not math.isfinite(b) or not 0 <= a < b <= duration for a, b in excluded):
+        raise CaptionCoverageError("Invalid non-speech event timestamps")
     report = {"status": "checking", "duration": duration, "settings": vars(cfg),
+              "non_speech_regions": excluded,
               "first_pass_reference": bool(reference), "initial_issues": [], "retries": []}
     if report_path is not None and Path(report_path).exists():
         try:
@@ -150,10 +160,22 @@ def repair_caption_words(audio, words, cfg, transcribe_window, *, reference_word
             temporary.write_text(json.dumps(report, indent=2))
             temporary.replace(path)
 
+    def audited_speech(regions):
+        """Subtract confirmed non-speech events, including new section-retry results."""
+        excluded = _merge_ranges(non_speech_regions or [])
+        if any(not math.isfinite(a) or not math.isfinite(b) or not 0 <= a < b <= duration for a, b in excluded):
+            raise CaptionCoverageError("Invalid non-speech event timestamps")
+        report["non_speech_regions"] = excluded
+        for left, right in excluded:
+            regions = [(a, b) for start, end in regions
+                       for a, b in ((start, min(end, left)), (max(start, right), end)) if b > a]
+        return regions
+
     try:
         if not _valid_words(words, duration):
             raise CaptionCoverageError("Invalid caption word timings; regenerate the transcript cache.")
-        speech = _speech_regions(audio)
+        detected_speech = _speech_regions(audio)
+        speech = audited_speech(detected_speech)
         issues, score = _issues(words, speech, reference, duration, cfg)
         report["initial_issues"] = issues
         if not issues:
@@ -181,6 +203,8 @@ def repair_caption_words(audio, words, cfg, transcribe_window, *, reference_word
                         raise CaptionCoverageError("Retry returned invalid word timings")
                     if any(w.start < left - .1 or w.end > right + .1 for w in replacement):
                         raise CaptionCoverageError("Retry word timings escaped the audio window")
+                    speech = audited_speech(detected_speech)
+                    issues, score = _issues(words, speech, reference, duration, cfg)
                     spoken = _overlap(speech, left, right)
                     if len(replacement) > max(10, spoken * 8):
                         raise CaptionCoverageError("Retry returned implausibly dense speech")
@@ -202,7 +226,8 @@ def repair_caption_words(audio, words, cfg, transcribe_window, *, reference_word
         save("failed", issues)
         raise CaptionCoverageError(
             f"Missing or unreliable caption speech remains at {issues}; clip export stopped. "
-            "Inspect words.quality.json and retry with a different transcription model."
+            "Inspect words.quality.json and retry with a different transcription model.",
+            words=words, remaining_issues=issues,
         )
     except Exception as exc:
         if report["status"] != "failed":

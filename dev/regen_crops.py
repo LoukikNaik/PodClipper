@@ -6,15 +6,17 @@ Usage:
 """
 
 import re
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from podclipper.config import load_config
+from podclipper.config import load_default_config
 from podclipper.crop import smart_crop_916, smart_crop_916_stacked
 from podclipper.detect import detect_humans_per_frame, detect_humans_all_per_frame
 from podclipper.logging_util import setup_logging
+from podclipper.scenes import review_scenes
 from podclipper.subtitles import burn_subtitles
 from podclipper.timeline import (
     apply_min_dwell,
@@ -22,6 +24,7 @@ from podclipper.timeline import (
     classify_wide_shot_frames,
 )
 from podclipper.transcribe import transcribe_second_pass_cached
+from podclipper.types import Word
 
 
 def _title_from_sidecar(path: Path) -> str:
@@ -46,13 +49,16 @@ def main() -> int:
         return 2
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    cfg = load_config(Path("config/default.yaml"))
+    cfg = load_default_config()
     log = setup_logging("INFO")
 
     crop_mode = getattr(cfg.crop, "mode", "auto")
 
     reel_dirs = sorted(p for p in cache_dir.iterdir()
-                       if p.is_dir() and p.name.startswith("reel_"))
+                       if p.is_dir() and p.name.startswith(("reel_", "clip-")))
+    metadata = {p: json.loads((p / "clip.json").read_text()) if (p / "clip.json").exists() else {}
+                for p in reel_dirs}
+    names = {p: metadata[p].get("stem", p.name) for p in reel_dirs}
     if not reel_dirs:
         log.warning(f"No reel_* dirs found in {cache_dir}")
         return 1
@@ -62,7 +68,7 @@ def main() -> int:
     if sidecar_dir:
         wanted = {p.stem for p in sidecar_dir.glob("reel_*.txt")}
         if wanted:
-            filtered = [d for d in reel_dirs if d.name in wanted]
+            filtered = [d for d in reel_dirs if names[d] in wanted]
             log.info(f"Filtering to {len(filtered)}/{len(reel_dirs)} reels "
                      f"matching sidecars in {sidecar_dir}")
             reel_dirs = filtered
@@ -81,6 +87,7 @@ def main() -> int:
         log.info(f"[{i}/{len(reel_dirs)}] {reel_dir.name}")
         try:
             cropped_path = reel_dir / "cropped_regen.mp4"
+            scene_plan = review_scenes(segment, cfg, reel_dir / "scenes.json")
             if crop_mode == "auto":
                 persons, _hf, fps, w, h = detect_humans_all_per_frame(segment, cfg)
                 is_wide = classify_wide_shot_frames(
@@ -91,7 +98,7 @@ def main() -> int:
                     height_cap_frac=getattr(cfg.crop, "shot_height_cap_frac", 0.70),
                     smooth_window_frames=getattr(cfg.crop, "shot_smooth_window_frames", 15),
                 )
-                smart_crop_916_stacked(segment, persons, is_wide, cropped_path, cfg)
+                smart_crop_916_stacked(segment, persons, is_wide, cropped_path, cfg, scene_plan=scene_plan)
             else:
                 # DEPRECATED `crop.mode: single` branch.
                 per_frame, fps, w, h = detect_humans_per_frame(segment, cfg)
@@ -107,16 +114,17 @@ def main() -> int:
                     video_path=segment,
                 )
                 timeline = apply_min_dwell(timeline, cfg.crop.min_segment_dwell_seconds)
-                smart_crop_916(segment, timeline, cropped_path, cfg)
+                smart_crop_916(segment, timeline, cropped_path, cfg, scene_plan=scene_plan)
 
-            words = transcribe_second_pass_cached(
-                segment, reel_dir / "words.json", cfg,
-            )
+            if (reel_dir / "caption_words.json").exists():
+                words = [Word(**w) for w in json.loads((reel_dir / "caption_words.json").read_text())]
+            else:
+                words = transcribe_second_pass_cached(segment, reel_dir / "words.json", cfg)
 
-            title = (_title_from_sidecar(sidecar_dir / f"{reel_dir.name}.txt")
-                     if sidecar_dir else "")
+            title = (_title_from_sidecar(sidecar_dir / f"{names[reel_dir]}.txt")
+                     if sidecar_dir else metadata[reel_dir].get("clip", {}).get("title", ""))
 
-            final_path = output_dir / f"{reel_dir.name}.mp4"
+            final_path = output_dir / f"{names[reel_dir]}.mp4"
             burn_subtitles(cropped_path, words, final_path, cfg, title=title)
             log.info(f"  → {final_path}")
         except Exception as e:  # noqa: BLE001

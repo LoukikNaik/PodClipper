@@ -11,6 +11,7 @@ from typing import Optional
 
 from .llm import LLMError, LLMProvider
 from .types import Word
+from .prompts import load_prompt
 
 log = logging.getLogger("ave.evaluate")
 
@@ -241,7 +242,8 @@ def evaluate_content(
     try:
         response = provider.complete(
             user_prompt=user_prompt,
-            system_prompt=_EVAL_SYSTEM,
+            system_prompt=_EVAL_SYSTEM + ("\n" + load_prompt("comedy_context.txt")
+                if getattr(getattr(cfg, "crop", None), "comedy_mode", False) else ""),
             max_tokens=cfg.llm.max_tokens,
         )
     except LLMError as e:

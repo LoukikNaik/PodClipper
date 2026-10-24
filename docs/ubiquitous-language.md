@@ -9,6 +9,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `02_snapped_and_capped.json`                                                                                                                 | Analyze debug cache: clips after segment-boundary snap and target-count cap.                                        |
 | `03_refined.json`                                                                                                                            | Analyze debug cache: per-clip refiner traces + clips after word-precise refinement.                                 |
 | `04_final.json`                                                                                                                              | Analyze debug cache: clips after title rewrites — what the pipeline actually produces.                              |
+| `_FFmpegPipe` | Subtitle encoder with disk-backed diagnostics and bounded process cleanup. |
 | `_pick_performer`                                                                                                                            | Comedy-mode per-frame performer selector: scores persons by brightness + full-body geometry, rejects shadowed audience.|
 | `analyze/`                                                                                                                                   | Subdir of `.cache/<video>/` holding per-stage JSON snapshots from `analyze_for_reels`.                              |
 | `analyze_for_reels`                                                                                                                          | Stage 4: sends the timestamped transcript to an LLM and returns a list of `Clip` objects.                           |
@@ -27,11 +28,15 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `burn_subtitles`                                                                                                                             | Renders karaoke word-highlight subtitles + optional fading title overlay onto a video.                              |
 | `cache_dir`                                                                                                                                  | `cfg.paths.cache_dir` — root for all intermediate artifacts; default `.cache`.                                      |
 | `caption_repair` | Internal transcription settings for detecting missing caption speech and bounded retries of affected audio windows. |
+| `non_speech_regions` | Scribe-tagged laughter/applause gaps excluded from speech-coverage audits; spoken word intervals remain protected. |
+| `unreliable_ranges` | Bounded unresolved source-transcript spans, padded with context, barred from podcast and comedy clip selection after section retries; successful repairs are kept and exported clip caption checks stay strict. |
 | `caption reference` | Available first-pass word timings shifted into clip time; used to flag suspicious caption omissions, never copied as replacement speech. |
+| `caption_words.json` | Export sidecar containing the exact cleaned timed words burned into that reel and their source offset. |
 | `CaptionCoverageError` | Stops caption export when speech coverage remains suspicious after bounded local transcription retries. |
 | `ChunkRange`                                                                                                                                 | Dataclass for one parallel-transcription chunk: `(index, start, end)`.                                              |
 | `classify_wide_shot_frames`                                                                                                                  | Active wide-shot classifier; returns per-frame bool array from bbox geometry.                                       |
 | `cleanup_words`                                                                                                                              | LLM post-pass that fixes mis-spellings and transliterates non-Latin scripts.                                        |
+| `comedy selection` | Stand-up clip selection that preserves a complete setup, punchline, optional tags, and a bounded reaction tail. |
 | `Clip`                                                                                                                                       | Dataclass: one reel-worthy moment with `(start, end, title, reason, hook_score)`.                                   |
 | `ClipArtifacts`                                                                                                                              | Aggregates everything produced for a single clip through the per-clip pipeline.                                     |
 | `closer_punch`                                                                                                                               | Trailer scorecard axis: last pick lands as a memorable closer (1–5).                                                |
@@ -153,7 +158,11 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `scene_cuts` | Internal auto-crop config for image-cut detection, fresh framing and an optional short crossfade; zero fade duration preserves hard cuts. |
 | `_scene_signature` | Small blurred frame thumbnail used to detect abrupt source-image changes independently of participant identity. |
 | `ScenePlan` | Cached, frame-indexed source shot decisions: speaker, audience, other, or uncertain. |
+| `Scribe v2` | Experimental OpenRouter transcription backend enabled with `--scribe` or `transcribe.scribe.enabled`; transcribes source audio once and reuses timed words for captions. |
+| `ScribeTranscriber` | Resumable Scribe requests, full-source word merging, clip slicing, and bounded section repairs using the shared endpoint and API key. |
 | `second pass`                                                                                                                                | Whisper run #2: single-shot high-quality re-transcription per clip; produces subtitle word timings.                 |
+| `second_pass.initial_prompt` | Optional short vocabulary context for a clip transcription retry; absent in the normal pass. |
+| `second_pass.task` | Whisper task for clip captions: transcribe by default, or translate into English for a deliberate retry. |
 | `segment.mp4`                                                                                                                                | Per-clip cache artifact: raw ffmpeg-extracted clip segment with `pad_seconds` buffer.                               |
 | `select-only` | CLI --select-only: runs first-pass transcription and complete clip analysis, then saves selection reports and stops. |
 | `select_track`                                                                                                                               | Music selector: one LLM call scores every library section 0–10 for the reel and picks the argmax (random below `min_score`).|
@@ -171,6 +180,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `smart_crop_916_stacked`                                                                                                                     | Active shot-aware renderer with single ↔ stacked-dual-panel layout.                                                 |
 | `snap-to-target`                                                                                                                             | Once the rendered bbox is within 1 px of target on every axis, snap exactly (no wobble).                            |
 | `source_indices` | Ordered original word indices covered by a caption correction; each correction returns one or more words. |
+| `source_repair_max_windows` | Internal Scribe limit for section repair requests per full-source chunk; defaults to 64, separate from the eight-window reel-caption budget. |
 | `source_limit_seconds`                                                                                                                       | `cfg.analyze.source_limit_seconds` (CLI `--limit-minutes`): cap clip selection to the first N seconds of the source; null = whole video. |
 | `source panel` | A source-image region bounded by panel dividers or image edges; independent of the output's stacked panels. |
 | `SourcePanel` | Dataclass holding the left and exclusive right pixel bounds of a source panel. |

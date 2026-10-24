@@ -67,7 +67,7 @@ def build_parser(show_advanced: bool = False) -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--language", default=None,
-        help=advanced("Force Whisper language (e.g. 'en', 'hi'). Default: auto-detect"),
+        help=advanced("Set source speech language (e.g. 'en', 'hi'). Default: auto-detect"),
     )
     p.add_argument(
         "--whisper-engine", choices=["mlx", "faster"], default=None,
@@ -108,6 +108,7 @@ def build_parser(show_advanced: bool = False) -> argparse.ArgumentParser:
     p.add_argument("--type", choices=["podcast", "comedy"], default=None, help=advanced("Content type (default: podcast)"))
     p.add_argument("--debug", action="store_true", help=advanced("Write detection and crop debug overlays"))
     p.add_argument("--select-only", action="store_true", help="Save clip selection for review and stop before clip processing (reels mode)")
+    p.add_argument("--scribe", action="store_true", help="Experimental: transcribe once with Scribe via OpenRouter and reuse its words for captions")
     p.add_argument("--selection", type=Path, help="Render clips from a saved selection.json without selecting again (reels mode)")
     return p
 
@@ -189,9 +190,14 @@ def _check_setup(cfg) -> None:
     key = "LLM_API_KEY"
     if not os.environ.get(key, "").strip():
         raise ValueError(f"Missing {key}. Add {key}=your-api-key to .env or export it in your shell.")
+    if getattr(getattr(cfg.transcribe, "scribe", None), "enabled", False):
+        from .scribe import validate_connection
+        validate_connection(cfg)
 
 
 def apply_cli_overrides(cfg, args) -> None:
+    if getattr(args, "scribe", False):
+        cfg.transcribe.scribe.enabled = True
     if args.output_dir is not None:
         cfg.paths.output_dir = str(args.output_dir)
     if args.language is not None:
@@ -268,6 +274,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = _load_runtime_config(config_path)
         apply_cli_overrides(cfg, args)
+        if cfg.transcribe.scribe.enabled and args.mode != "reels":
+            raise ValueError("--scribe is supported only in reels mode")
         if cfg.analyze.target_clips < 1:
             raise ValueError("--clips must be at least 1")
         if args.limit_minutes is not None and args.limit_minutes <= 0:

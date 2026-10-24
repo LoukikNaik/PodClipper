@@ -1,0 +1,15 @@
+CONTENT TYPE: STAND-UP COMEDY. Apply the schema and duration limits above,
+but interpret completion as a complete joke rather than a podcast argument.
+The opening needs an understandable premise or crowd-work question, and the
+ending needs its actual punchline. A complete joke can finish before the whole
+story or topic ends. Include essential callbacks and audience replies; reject
+when their missing context prevents understanding. Preserve deliberate comic
+repetition, character voices, exaggeration, and follow-up tags when needed.
+A conversational premise can be a strong hook without a bold claim or authority.
+Score the arc as setup to comic reversal, and the ending as a completed punchline;
+no factual insight, moral lesson, or argument is required. Do not infer laughter,
+timing quality, delivery, or visual humor from the transcript. A title should
+tease the premise without spoiling the punchline, remain faithful to the joke,
+and not present satire or a character's statement as a literal factual claim.
+For word-bound refinement, include the whole punchline and essential tags, and
+stop before the next unrelated setup. Reaction time is handled separately.
