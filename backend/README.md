@@ -63,10 +63,10 @@ older API clients may still supply an explicit ceiling using `clips`.
 
 ### Admin dashboard
 
-Set `WEB_ADMIN_GOOGLE_SUB` in the server's private `.env` to the administrator's
-verified Google account identifier (`users.id` in SQLite), then restart the API.
-Leave it blank to disable admin access. This is a single account ID, not an email
-allowlist; only server configuration can grant the role.
+Configure an access group with `admin: true` and assign verified Google account
+IDs to it in the private policy selected by `WEB_ACCESS_CONFIG`. See **Access
+groups and future memberships** below. Legacy installations without a policy
+can still use `WEB_ADMIN_GOOGLE_SUB` for a single administrator.
 
 The owner sees **Admin dashboard** in the workspace header (`/admin`). It lists
 all users' jobs, current stages and finished reels, with playback and downloads.
@@ -74,8 +74,8 @@ It refreshes every five seconds and paginates in groups of 50. The admin view is
 read-only; retry controls remain in each user's own workspace. All `/admin/*`
 endpoints, including video GET/HEAD requests, enforce this role on the server.
 Ordinary `/jobs/*` routes continue to enforce account ownership for everyone.
-The configured administrator’s own results do not expire automatically, including
-existing jobs. Other accounts retain the configured `WEB_RETENTION_DAYS` policy.
+Retention is configured separately per access group. Set `retention_days: null`
+to retain results without automatic expiry; admin access alone does not grant this.
 Abandoned uploads still expire, and successful jobs still clear source/cache files.
 
 - `web-data/web.sqlite3` contains users, hashed session tokens, one-time login
@@ -148,7 +148,7 @@ Application data is independent of Instagram posting history in podcast-agent.
 
 The workspace accepts MP4, MOV, M4V, MKV, and WebM files strictly below
 1,000,000,000 bytes, with an audio track and the same three-hour video limit.
-Uploads and YouTube links share the five-video monthly allowance.
+Uploads and YouTube links share the five-video monthly allowance. The configured owner account has no monthly limit, including retries.
 
 The API reserves one allowance slot when an owned upload session starts. The
 browser transfers 32,000,000-byte chunks with four parallel requests; the API
@@ -193,3 +193,31 @@ actual `ready_count`, while job detail endpoints return the full reel list.
 The web app polls only the open job, avoids repeatedly requesting account data,
 skips polling in hidden tabs, and slows idle library polling. The API continues
 using one process so the global four-upload limit remains intact.
+
+## Access groups and future memberships
+
+Copy `backend/access.example.yaml` to a private server file, such as
+`/path/to/podclipper-web/access.yaml`, and set `WEB_ACCESS_CONFIG` to its absolute
+path in the server `.env`. Restart both API and worker after changing the policy;
+wait for active processing to finish before restarting the worker.
+
+The configuration defines a default group, named groups, and a mapping of quoted
+verified Google account IDs (`sub`) to group names. Each account has one group.
+Each group sets `monthly_videos`, `retention_days`, and `admin` independently.
+Use `null` for unlimited monthly submissions or no automatic result deletion.
+The example provides `free` (5 videos, 7 days), `member` (50 videos, 30 days), and
+`owner` (unlimited, no expiry, admin). These values are editable, not paid tiers
+that users can purchase yet. Admin grants access to all users' result dashboards;
+keep it false for ordinary paid memberships.
+
+Users not assigned explicitly get the default group. Only server operators can
+edit membership; users cannot choose their own group through API requests.
+An invalid or missing explicitly configured file stops startup rather than
+silently granting permissions. The config is authoritative: when enabled,
+`WEB_ADMIN_GOOGLE_SUB` and `WEB_RETENTION_DAYS` no longer grant access or define
+per-account retention. Without it, legacy settings continue to work.
+
+Store live membership files outside the source archive and never commit account
+IDs. No payment or webhook handling is implemented. A future billing integration
+can update membership through a trusted server-side service; group permissions
+and quota checks already apply consistently to links, uploads, retries, and expiry.

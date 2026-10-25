@@ -256,8 +256,8 @@ def register_upload_routes(app, settings, auth, owned, serialize, rate_limit):
                 if not info or info['filename'] != filename or info['size'] != payload.size:
                     raise HTTPException(409, 'This request was already used for another submission.')
                 return serialize(db, previous)
-            if usage(db, user['id']) >= 5:
-                raise HTTPException(429, 'You have used all 5 videos for this month. Your allowance resets on the 1st (UTC).')
+            if (limit := settings.access_for(user['id']).monthly_videos) is not None and usage(db, user['id']) >= limit:
+                raise HTTPException(429, f'You have used all {limit} videos for this month. Your allowance resets on the 1st (UTC).')
             if db.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('uploading','queued','running')").fetchone()[0] >= 100:
                 raise HTTPException(503, 'The processing queue is full. Try again later.')
             if shutil.disk_usage(settings.data).free < MIN_FREE_BYTES + 2 * payload.size:

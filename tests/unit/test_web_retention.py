@@ -24,3 +24,19 @@ def test_expiration_keeps_owner_reels_but_removes_other_accounts_results(tmp_pat
         assert db.execute('SELECT count(*) FROM reels WHERE job_id=?', ('other-sub',)).fetchone()[0] == 0
     assert (tmp_path / 'jobs/owner-sub/reels/one.mp4').read_bytes() == b'keep me'
     assert not (tmp_path / 'jobs/other-sub').exists()
+
+
+def test_result_expiry_uses_each_users_group_retention(tmp_path):
+    from podclipper_web.access import AccessGroup, AccessPolicy
+    settings=Settings(tmp_path,'test.apps.googleusercontent.com','https://example.com',True,10800,7)
+    settings.access_policy=AccessPolicy('free',{'free':AccessGroup(5,7),'paid':AccessGroup(50,30)}, {'paid-sub':'paid'})
+    initialize(settings)
+    old=time.time()-10*86400
+    with database(settings) as db:
+        for uid in ('free-sub','paid-sub'):
+            db.execute('INSERT INTO users VALUES (?,?,?,?)',(uid,uid+'@example.com',uid,old))
+            db.execute("INSERT INTO jobs (id,user_id,video_id,url,clips,quota_month,request_key,created_at,updated_at,finished_at,state) VALUES (?,?,?,'',1,'2026-10',?,?,?,?,'completed')",(uid,uid,uid,uid,old,old,old))
+    expire(settings)
+    with database(settings) as db:
+        assert db.execute('SELECT state FROM jobs WHERE id=?',('paid-sub',)).fetchone()[0]=='completed'
+        assert db.execute('SELECT state FROM jobs WHERE id=?',('free-sub',)).fetchone()[0]=='expired'

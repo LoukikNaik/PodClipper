@@ -46,6 +46,30 @@ class AdminDashboardTests(unittest.TestCase):
     def login(self, token):
         self.client.cookies.set(self.settings.cookie, token)
 
+    def test_paid_group_limits_do_not_grant_admin_access(self):
+        from podclipper_web.access import AccessGroup, AccessPolicy
+        self.settings.access_policy=AccessPolicy('free',{'free':AccessGroup(5,7),'paid':AccessGroup(50,30)}, {'another-sub':'paid'})
+        self.login('other-session')
+        info=self.client.get('/me').json()
+        self.assertEqual(info['limit'],50)
+        self.assertEqual(info['retention_days'],30)
+        self.assertFalse(info['is_admin'])
+        self.assertEqual(self.client.get('/admin/jobs').status_code,403)
+
+    def test_only_configured_owner_is_exempt_from_monthly_video_cap(self):
+        from podclipper_web.store import month
+        with database(self.settings) as db:
+            for uid in ('owner-sub','another-sub'):
+                for n in range(5):
+                    db.execute("INSERT INTO jobs (id,user_id,video_id,url,clips,quota_month,request_key,created_at,updated_at) VALUES (?,?,?,'',0,?,?,0,0)",
+                               (f'{uid}-{n}',uid,f'vid-{n}',month(),f'key-{n}'))
+        headers={'Origin':self.settings.origin,'X-CSRF-Token':'csrf'}
+        for token, expected in [('owner-session',200),('other-session',429)]:
+            self.login(token)
+            self.assertEqual(self.client.get('/me').json()['limit'],None if expected==200 else 5)
+            self.assertEqual(self.client.post('/jobs',json={'url':'https://youtu.be/zyxwvutsrqp','request_key':'quota-test-request-1'},headers=headers).status_code,expected)
+            self.assertEqual(self.client.post('/uploads',json={'filename':'test.mp4','size':100,'request_key':'quota-test-upload-1'},headers=headers).status_code,expected)
+
     def test_only_configured_google_subject_can_view_admin_jobs(self):
         self.assertEqual(self.client.get('/admin/jobs').status_code, 401)
         self.login('other-session')

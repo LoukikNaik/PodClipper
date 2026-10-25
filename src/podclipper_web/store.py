@@ -18,6 +18,16 @@ class Settings:
     retention_days: int
     admin_user_id: str = ""
 
+    access_policy: object = None
+
+    def access_for(self, user_id):
+        from .access import AccessGroup
+        if self.access_policy is not None:
+            return self.access_policy.for_user(user_id)
+        if self.admin_user_id and user_id == self.admin_user_id:
+            return AccessGroup(None, None, True)
+        return AccessGroup(5, self.retention_days)
+
     @classmethod
     def load(cls):
         from podclipper.main import _load_dotenv
@@ -35,6 +45,10 @@ class Settings:
             raise ValueError("Set GOOGLE_CLIENT_ID to the Google OAuth web client ID")
         if not 60 <= settings.max_seconds <= 14400 or not 1 <= settings.retention_days <= 30:
             raise ValueError("Invalid video duration or retention settings")
+        access_path = os.environ.get("WEB_ACCESS_CONFIG", "").strip()
+        if access_path:
+            from .access import load_policy
+            settings.access_policy = load_policy(Path(access_path).expanduser().resolve())
         settings.data.mkdir(parents=True, exist_ok=True, mode=0o700)
         settings.data.chmod(0o700)
         return settings

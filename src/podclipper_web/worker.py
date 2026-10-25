@@ -228,17 +228,21 @@ def process(settings, job, lock_fds, preparation=False):
 def expire(settings):
     from .uploads import expire_uploads
     expire_uploads(settings)
-    cutoff = time.time() - settings.retention_days * 86400
     with database(settings) as db:
-        rows = db.execute("SELECT id FROM jobs WHERE user_id<>? AND "
-                          "((state IN ('completed','partial','failed') AND finished_at<?) "
-                          "OR (state='expired' AND purged_at IS NULL))", (settings.admin_user_id,cutoff)).fetchall()
+        rows = db.execute("SELECT id,user_id,finished_at,state FROM jobs WHERE "
+                          "state IN ('completed','partial','failed') OR (state='expired' AND purged_at IS NULL)").fetchall()
     for row in rows:
+        days = settings.access_for(row['user_id']).retention_days
+        if days is None:
+            continue
+        cutoff = time.time() - days * 86400
+        if row['state'] != 'expired' and (row['finished_at'] is None or row['finished_at'] >= cutoff):
+            continue
         with database(settings) as db:
             db.execute('BEGIN IMMEDIATE')
-            changed=db.execute("UPDATE jobs SET state='expired',stage='expired',updated_at=? WHERE id=? AND user_id<>? AND "
+            changed=db.execute("UPDATE jobs SET state='expired',stage='expired',updated_at=? WHERE id=? AND "
                                "((state IN ('completed','partial','failed') AND finished_at<?) OR (state='expired' AND purged_at IS NULL))",
-                               (time.time(),row['id'],settings.admin_user_id,cutoff))
+                               (time.time(),row['id'],cutoff))
             if not changed.rowcount:
                 continue
             db.execute('DELETE FROM reels WHERE job_id=?',(row['id'],))

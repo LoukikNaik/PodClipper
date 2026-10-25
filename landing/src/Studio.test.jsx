@@ -151,3 +151,13 @@ test('opening a podcast fetches its details rather than repeatedly loading the w
   await screen.findByRole('heading',{name:'My own podcast',level:1})
   expect(fetch.mock.calls.some(([url])=>new URL(url).pathname==='/jobs/own-job')).toBe(true)
 })
+
+test('unlimited owner can submit beyond five videos without a monthly cap display', async () => {
+  window.history.replaceState({}, '', '/try')
+  const original=fetch.getMockImplementation()
+  fetch.mockImplementation(async (url, options) => new URL(url).pathname==='/me' ? response({is_admin:true,name:'Owner',used:8,limit:null,retention_days:null}) : original(url,options))
+  render(<App />)
+  expect(await screen.findByText('Unlimited videos')).toBeTruthy()
+  expect(screen.getByRole('button',{name:'Find reels'}).disabled).toBe(false)
+  expect(screen.queryByText('Resets on the 1st · UTC')).toBeNull()
+})

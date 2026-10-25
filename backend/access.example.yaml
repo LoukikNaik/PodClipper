@@ -1,0 +1,19 @@
+# Copy to a private access.yaml on the server. IDs must be quoted Google "sub" values.
+default_group: free
+groups:
+  free:
+    monthly_videos: 5
+    retention_days: 7
+    admin: false
+  member:
+    monthly_videos: 50
+    retention_days: 30
+    admin: false
+  owner:
+    monthly_videos: null
+    retention_days: null
+    admin: true
+users: {}
+# Example assignment (replace users: {} above):
+# users:
+#   "verified-google-account-id": member

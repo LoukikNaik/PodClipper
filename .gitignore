@@ -119,3 +119,7 @@ secrets.json
 *.orig
 .venv*
 web-data/
+
+# Private account membership configuration
+access.yaml
+backend/access.yaml

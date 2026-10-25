@@ -32,9 +32,10 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `caption_repair` | Internal transcription settings for detecting missing caption speech and bounded retries of affected audio windows. |
 | `ChunkReceiver` | Bounded upload-chunk writer that performs file, hash, flush, and database work off the API event loop while holding upload locks. |
 | `clean URL routing` | Browser history navigation for workspace and admin paths, with legacy hash-link migration and a GitHub Pages app fallback. |
-| `monthly allowance` | Five distinct source-video submissions per Google account per UTC calendar month; failed jobs release their reservation. |
+| `access group` | Server-configured monthly video allowance, result retention, and admin permission assigned by verified Google account ID; unassigned users use the default group. |
+| `monthly allowance` | Five distinct source-video submissions per Google account per UTC calendar month; access groups configure limits or unlimited submissions, and failed jobs release their reservation. |
 | `non_speech_regions` | Scribe-tagged laughter/applause gaps excluded from speech-coverage audits; spoken word intervals remain protected. |
-| `owner retention` | The configured administrator’s own finished web jobs and reels are exempt from automatic result expiry; other accounts keep the configured retention period. |
+| `owner retention` | An access group with null retention keeps finished web jobs and reels without automatic expiry, independently of admin permission. |
 | `podcast card` | Workspace or admin library link showing a WebJob, its processing status, and an authenticated reel poster when available. |
 | `preparation task` | Durable web task for uploaded-file validation, source download, and cached cloud transcription before a render slot is used. |
 | `render task` | Durable web task that selects and exports reels while holding the single render resource slot. |

@@ -146,7 +146,7 @@ def create_app():
         return row
 
     def is_admin(user):
-        return bool(settings.admin_user_id) and secrets.compare_digest(user["id"], settings.admin_user_id)
+        return settings.access_for(user["id"]).admin
 
     def admin(user=Depends(auth)):
         if not is_admin(user):
@@ -208,11 +208,11 @@ def create_app():
     @app.get("/config")
     def config():
         with database(settings) as db:
-            return {"google_client_id": settings.client_id, "monthly_limit": 5,
+            return {"google_client_id": settings.client_id, "monthly_limit": settings.access_for("").monthly_videos,
                     "max_reels": max_reels, "max_upload_bytes": MAX_UPLOAD_BYTES,
                     "upload_chunk_bytes": CHUNK_BYTES, "upload_parallel_requests": PARALLEL_REQUESTS,
                     "max_video_minutes": settings.max_seconds // 60,
-                    "retention_days": settings.retention_days,
+                    "retention_days": settings.access_for("").retention_days,
                     "worker_available": (settings.data / "worker-heartbeat").exists()
                     and time.time() - (settings.data / "worker-heartbeat").stat().st_mtime < 90}
 
@@ -265,8 +265,8 @@ def create_app():
     def me(user=Depends(auth)):
         with database(settings) as db:
             return {"name": user["name"], "email": user["email"], "csrf": user["csrf"],
-                    "used": usage(db, user["id"]), "limit": 5, "month": month(), "timezone": "UTC",
-                    "is_admin": is_admin(user), "retention_days": None if is_admin(user) else settings.retention_days}
+                    "used": usage(db, user["id"]), "limit": settings.access_for(user["id"]).monthly_videos, "month": month(), "timezone": "UTC",
+                    "is_admin": is_admin(user), "retention_days": settings.access_for(user["id"]).retention_days}
 
     @app.post("/auth/logout")
     def logout(request: Request, response: Response, user=Depends(auth)):
@@ -319,8 +319,8 @@ def create_app():
                                   (user["id"], video_id)).fetchone()
             if existing:
                 return serialize(db, existing)
-            if usage(db, user["id"]) >= 5:
-                raise HTTPException(429, "You have used all 5 videos for this month. Your allowance resets on the 1st (UTC).")
+            if (limit := settings.access_for(user["id"]).monthly_videos) is not None and usage(db, user["id"]) >= limit:
+                raise HTTPException(429, f"You have used all {limit} videos for this month. Your allowance resets on the 1st (UTC).")
             if db.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('uploading','queued','running')").fetchone()[0] >= 100:
                 raise HTTPException(503, "The processing queue is full. Try again later.")
             job_id = str(uuid.uuid4())
@@ -348,7 +348,7 @@ def create_app():
                 raise HTTPException(409,'This upload failed video validation. Choose another file in your workspace; your allowance was returned.')
             quota_month = row["quota_month"]
             if not row["reserved"]:
-                if usage(db, user["id"]) >= 5:
+                if (limit := settings.access_for(user["id"]).monthly_videos) is not None and usage(db, user["id"]) >= limit:
                     raise HTTPException(429, "Your monthly allowance is used up")
                 quota_month = month()
             db.execute("UPDATE jobs SET state='queued',stage='queued',error=NULL,reserved=1,quota_month=?,"
