@@ -465,3 +465,13 @@ Comments in this codebase are kept deliberately minimal. The rule:
 When editing existing code, **don't reintroduce explanatory comments.** If
 you're tempted to add one, ask: would removing this confuse a reader who
 already understands the surrounding code? If no → don't add it.
+
+### Owner's Instagram queue preference
+
+When new reels are generated for loukiknaik, or the owner asks to check their new
+reels, transfer accepted reels to the posting agent on `ssh luv` and mix them
+through the remaining unposted queue. Do not append a whole podcast at the end.
+Use the posting agent's enqueue/reschedule flow, which randomizes within each
+podcast and spreads sources across upcoming slots. Preserve the two-hour cadence,
+posted/in-flight records, duplicate checks, and existing review requirements.
+Posting-agent repository: `/Users/loukiknaik/projects/podcast-agent`.

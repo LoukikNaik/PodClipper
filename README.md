@@ -20,10 +20,14 @@ are sent to that endpoint.
 
 ### Hosted workspace
 
-[Try the web workspace](https://podclipper.loukik.dev/#/try): sign in with Google,
-paste a public YouTube link, and return to your saved progress and private reels.
-The hosted service allows five videos per account per UTC calendar month, with
-5, 10, or 15 requested reels. Videos can be up to three hours; results are kept
+[Try the web workspace](https://podclipper.loukik.dev/try): sign in with Google,
+paste a public YouTube link or upload a video under 1 GB, and return to your saved
+progress and private reels. Uploads use 32 MB chunks with four parallel requests;
+if interrupted, choose the same file to resume. Keep the tab open until the upload
+finishes, then processing continues on the server.
+The hosted service allows five videos per account per UTC calendar month.
+It discovers strong moments automatically, with a duration-based cap of up to
+30 reels per video. Videos can be up to three hours; results are kept
 for seven days. Hosted processing runs on the operator's server and uses external
 AI services, as explained in the [privacy policy](https://podclipper.loukik.dev/privacy/).
 See [backend deployment](backend/README.md) to run the web service yourself.
@@ -170,9 +174,23 @@ caption review before posting.
 
 ## Everyday commands
 
+Selection searches overlapping transcript sections. As soon as a section finishes,
+its strongest moments are refined and reviewed; approved reels start exporting
+while later sections are searched. Completed reels stay available if a later
+section fails, and retries resume from saved decisions. Boundary overlaps are
+deduplicated, accepted reels stay stable, and space is reserved for later sections.
+Unused space can be filled by strong earlier candidates after the search finishes.
+The default maximum is one reel per
+five source minutes, with a minimum ceiling of three and a hard ceiling of thirty:
+30 minutes allows up to 6, one hour up to 12, and two hours up to 24. Quality checks
+can produce fewer; the limit is not a quota. Existing explicit `--clips` or
+`content.clips` values remain optional ceilings. Internal overrides live under
+`analyze.min_reel_cap`, `max_reel_cap`, `seconds_per_reel`, and
+`discovery_window_seconds`; the starter config does not include them.
+
 ```bash
-# Run everything, asking for three clips
-podclipper podcast.mp4 --clips 3
+# Run everything; reel discovery is automatic
+podclipper podcast.mp4
 
 # Use pop captions instead of classic karaoke captions
 podclipper podcast.mp4 --captions pop
@@ -184,7 +202,7 @@ podclipper podcast.mp4 --output-dir outputs/my-podcast
 ### Want to review the picks before exporting?
 
 ```bash
-podclipper podcast.mp4 --clips 3 --select-only
+podclipper podcast.mp4 --select-only
 ```
 
 Read `outputs/<timestamp>/selection.md` for titles, source timestamps, full
@@ -205,7 +223,7 @@ per-clip transcription, cropping, captions, and evaluation still run normally.
 With an OpenRouter connection already set in `.env`, opt in per run:
 
 ```bash
-podclipper podcast.mp4 --scribe --clips 3
+podclipper podcast.mp4 --scribe
 ```
 
 Scribe v2 transcribes the source in resumable overlapping chunks. The LLM
@@ -233,7 +251,7 @@ These options are omitted from the minimal starter config.
 Full-source chunks can use up to 64 section repairs (`source_repair_max_windows`).
 If small speech gaps remain, podcast and comedy selection excludes them with
 surrounding context and keeps successful repairs. Processing still stops when
-unresolved speech exceeds 5% of a source chunk (`max_unreliable_fraction`);
+unresolved speech exceeds 10% of a source chunk (`max_unreliable_fraction`);
 set that limit to zero to require complete source coverage. Exported reel
 captions must still pass the strict coverage checks.
 
@@ -248,13 +266,11 @@ The starter config contains only the settings most people need:
 llm:
   endpoint: https://api.openai.com/v1
   model: gpt-5-mini
-content:
-  clips: 8
 output:
   captions: classic
 ```
 
-Change `content.clips` to ask for fewer or more clips. Captions can be `classic`,
+Reel discovery is automatic. Captions can be `classic`,
 `pop`, or `off`. Optional settings include `content.duration: [15, 90]` (seconds)
 and `output.directory: outputs`.
 
@@ -321,13 +337,12 @@ llm:
 This prefers DeepInfra while allowing other hosts. `only: [deepinfra]` restricts
 requests to that host. Model and provider availability depend on your endpoint.
 
-LLM calls default to `llm.max_tokens: 32768` (32k). Incomplete responses are
-never accepted. The retry ceiling also defaults to 32k, so a truncated response
-at that limit fails. To allow **one** larger retry, raise `llm.retry_max_tokens`
-above `max_tokens`; the retry uses up to twice the requested budget, capped by
-that ceiling. A retry can increase API cost, and your endpoint must support the
-larger budget. These settings are optional overrides; they don't need to appear
-in the minimal config.
+LLM calls default to `llm.max_tokens: 131072` (128k). Incomplete responses are
+never accepted. The retry ceiling also defaults to 128k. If a response is
+truncated, PodClipper can retry once with a larger budget when the configured
+ceiling is above `max_tokens`. A retry can increase API cost, and your endpoint
+must support the larger budget. These settings are optional overrides; they
+don't need to appear in the minimal config.
 
 ## What happens under the hood
 
@@ -378,9 +393,9 @@ Whisper, YOLO, and MediaPipe models download automatically on first use.
 Use the same setup and API key with a downloaded stand-up set:
 
 ```bash
-podclipper standup.mp4 --type comedy --clips 3
+podclipper standup.mp4 --type comedy
 # Optional API transcription instead of local Whisper
-podclipper standup.mp4 --type comedy --scribe --clips 3
+podclipper standup.mp4 --type comedy --scribe
 ```
 
 Comedy mode selects complete jokes with their setup and punchline, uses a
@@ -479,3 +494,8 @@ from a containing clip; speech coverage is checked again before export.
 Each exported reel includes a `.captions.json` sidecar with the exact cleaned
 words used on screen and their source offset. Failed caption cleanup is retried
 in small chunks; it is reported as an error instead of silently burning raw text.
+Caption correction requests use a strict JSON schema through LiteLLM. OpenRouter
+must route them to providers supporting the requested format. Local checks still
+require every source word to be covered exactly once and in order. If formatting
+fails repeatedly, only that chunk is subdivided once; completed corrections are
+cached and reused. Unsupported structured-output requests fail explicitly.

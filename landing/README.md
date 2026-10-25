@@ -2,12 +2,20 @@
 
 React + Vite site at [podclipper.loukik.dev](https://podclipper.loukik.dev).
 
-The `#/try` workspace uses Google-only sign-in against the separate laptop API.
+The `/try` workspace uses Google-only sign-in against the separate laptop API.
 Set `VITE_API_URL` in `.env.local` for development; production defaults to
 `https://podclipper-api.loukik.dev`. The Google client ID comes from the API's
 public `/config` endpoint, keeping frontend and backend settings aligned.
-Jobs live at `#/jobs/JOB_ID`, which works on GitHub Pages without server rewrites.
-The configured administrator also gets `#/admin` and `#/admin/jobs/JOB_ID` for a
+Jobs live at `/jobs/JOB_ID`, using browser history navigation. The build copies the app into `404.html` so direct links and refreshes work on GitHub Pages, matching the portfolio. Assets use root-relative paths. Old hash links are automatically replaced with clean URLs.
+Users paste a YouTube link or choose a local video in the source panel. Podcast cards
+show processing status and an authenticated reel preview when one is ready. The
+workspace uses the existing blue palette and adapts to mobile screens.
+Discovery and the duration-based reel cap are automatic;
+the UI shows actual ready counts rather than a requested quota. Lists request
+compact summaries; open podcasts fetch their own details. Busy views poll every
+five seconds, idle libraries every thirty seconds, and hidden tabs skip polling.
+Upload completion queues background validation while retaining the resume key.
+The configured administrator also gets `/admin` and `/admin/jobs/JOB_ID` for a
 read-only view of all accounts' jobs and reels. Authorization is enforced by the
 API using `WEB_ADMIN_GOOGLE_SUB`; no admin identity is bundled into the frontend.
 The public privacy page is `/privacy/`. See `../backend/README.md` for deployment.

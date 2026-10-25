@@ -28,17 +28,31 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `build_trailer_words`                                                                                                                        | Remaps each pick's clip-local 2nd-pass words into trailer-relative timestamps.                                      |
 | `burn_subtitles`                                                                                                                             | Renders karaoke word-highlight subtitles + optional fading title overlay onto a video.                              |
 | `cache_dir`                                                                                                                                  | `cfg.paths.cache_dir` — root for all intermediate artifacts; default `.cache`.                                      |
+| `caption corrections` | Strict structured-output object containing ordered source_indices and corrected words; local validation still requires complete, ordered source coverage. |
 | `caption_repair` | Internal transcription settings for detecting missing caption speech and bounded retries of affected audio windows. |
+| `ChunkReceiver` | Bounded upload-chunk writer that performs file, hash, flush, and database work off the API event loop while holding upload locks. |
+| `clean URL routing` | Browser history navigation for workspace and admin paths, with legacy hash-link migration and a GitHub Pages app fallback. |
 | `monthly allowance` | Five distinct source-video submissions per Google account per UTC calendar month; failed jobs release their reservation. |
 | `non_speech_regions` | Scribe-tagged laughter/applause gaps excluded from speech-coverage audits; spoken word intervals remain protected. |
+| `owner retention` | The configured administrator’s own finished web jobs and reels are exempt from automatic result expiry; other accounts keep the configured retention period. |
+| `podcast card` | Workspace or admin library link showing a WebJob, its processing status, and an authenticated reel poster when available. |
+| `preparation task` | Durable web task for uploaded-file validation, source download, and cached cloud transcription before a render slot is used. |
+| `render task` | Durable web task that selects and exports reels while holding the single render resource slot. |
+| `structured output` | Provider-enforced JSON schema requested through LiteLLM; caption correction requests require compatible OpenRouter endpoints. |
 | `Studio` | Google-gated website workspace for submitting YouTube links and returning to private WebJob results, including advisory skip verdicts. |
+| `StudioIcon` | Small inline SVG icon set shared by the web workspace and upload controls. |
+| `task lease` | Expiring worker ownership of one web task, renewed while active and combined with per-job process locks for crash-safe recovery. |
+| `transcribe_only` | Internal pipeline preparation mode that caches source transcription and returns before selection, detection, or reel rendering. |
 | `unreliable_ranges` | Bounded unresolved source-transcript spans, padded with context, barred from podcast and comedy clip selection after section retries; successful repairs are kept and exported clip caption checks stay strict. |
+| `upload chunk` | One owned video-file part, default 32 MB, streamed to disk and committed atomically; up to four parts transfer concurrently and retries verify identical bytes. |
+| `upload session` | Private in-progress video submission below 1 GB; reserves one monthly video, tracks completed parts for resuming, and enters the processing queue only after media validation. |
 | `caption reference` | Available first-pass word timings shifted into clip time; used to flag suspicious caption omissions, never copied as replacement speech. |
 | `caption_words.json` | Export sidecar containing the exact cleaned timed words burned into that reel and their source offset. |
 | `CaptionCoverageError` | Stops caption export when speech coverage remains suspicious after bounded local transcription retries. |
 | `ChunkRange`                                                                                                                                 | Dataclass for one parallel-transcription chunk: `(index, start, end)`.                                              |
 | `classify_wide_shot_frames`                                                                                                                  | Active wide-shot classifier; returns per-frame bool array from bbox geometry.                                       |
 | `cleanup_words`                                                                                                                              | LLM post-pass that fixes mis-spellings and transliterates non-Latin scripts.                                        |
+| `CleanupFormatError` | Caption response JSON or mapping validation failure eligible for bounded smaller-chunk retries. |
 | `comedy selection` | Stand-up clip selection that preserves a complete setup, punchline, optional tags, and a bounded reaction tail. |
 | `Clip`                                                                                                                                       | Dataclass: one reel-worthy moment with `(start, end, title, reason, hook_score)`.                                   |
 | `ClipArtifacts`                                                                                                                              | Aggregates everything produced for a single clip through the per-clip pipeline.                                     |
@@ -74,6 +88,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `face_aware`                                                                                                                                 | `cfg.detect.face_aware`: when true, anchors crop x on face center instead of body center.                           |
 | `face_landmarker.task`                                                                                                                       | MediaPipe FaceLandmarker model (lip/face landmarks) used by the diarize path.                                       |
 | `face_per_person`                                                                                                                            | Output of `_attribute_faces_to_persons`: `face_bbox_or_None` aligned with input persons.                            |
+| `discovery window` | Overlapping source-transcript interval searched for candidate reels; successful searches are cached and each section’s candidates enter review immediately. |
 | `FaceIdentityGuard` | Local YuNet detection and SFace comparison that verifies distinct visible faces in stacked crops without naming people. |
 | `FaceSubject` | A foreground face, its source person box, and an in-memory recognition feature vector. |
 | `fade_out_seconds`                                                                                                                           | `cfg.subtitles.fade_out_seconds`: trailing video-to-black + audio fade duration.                                    |
@@ -91,7 +106,8 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `height_cap_frac`                                                                                                                            | `cfg.crop.shot_height_cap_frac`: a person bbox must be shorter than this fraction to count for wide-shot.           |
 | `Hinglish` | Hindi-English mixed speech; captions preserve spoken Hindi in Roman letters and spoken English in English. |
 | `hook`                                                                                                                                       | Reel scorecard axis: first 2 seconds stop the scroll (1–5).                                                         |
-| `hook_score`                                                                                                                                 | LLM's self-reported confidence/ranking on a `Clip`; used to sort + cap to `target_clips`.                           |
+| `hook_score` | Model confidence for a candidate reel; used to rank distinct candidates before applying the reel cap. |
+| `incremental selection` | Review and checkpoint candidates as each discovery window finishes; export approved clips while later windows are searched, reserve cap space for later source intervals, and keep committed choices stable across retries. |
 | `ingest`                                                                                                                                     | Stage 1: ffprobe wrapper validating input and returning `VideoMeta`.                                                |
 | `IngestError` / `AudioError` / `DetectError` / `CropError` / `SubtitleError` / `AnalyzeError` / `LLMError` / `DiarizeError` / `CleanupError` | Per-stage exception classes; pipeline catches at the per-clip boundary.                                             |
 | `InstallSection` | Landing-page Homebrew and pip installation choices followed by shared setup and first-run commands. |
@@ -137,6 +153,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `quotables.json`                                                                                                                             | Cached trailer LLM #1 output (`pick_quotables`) under `.cache/<video>/trailer/`.                                    |
 | `raw wide`                                                                                                                                   | Per-frame wide-shot decision before temporal smoothing by `shot_smooth_window_frames`.                              |
 | `Reel`                                                                                                                                       | One produced 9:16 short-form video — output of reels-mode pipeline.                                                 |
+| `reel cap` | Duration-based maximum for automatically discovered reels: at least three, one per five source minutes, and at most thirty by default; quality can yield fewer. |
 | `reel poster` | Small JPEG of a finished reel's first frame, served through the same private user or admin media authorization as its video. |
 | `reel_detector.txt`                                                                                                                          | Selection prompt: tells the LLM what makes a reel-worthy clip.                                                      |
 | `reel_NN_<slug>.mp4`                                                                                                                         | Final reel naming convention; slug is derived from the title (lowercase, dash-separated, ≤40 chars).                |
@@ -170,6 +187,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `segment.mp4`                                                                                                                                | Per-clip cache artifact: raw ffmpeg-extracted clip segment with `pad_seconds` buffer.                               |
 | `select-only` | CLI --select-only: runs first-pass transcription and complete clip analysis, then saves selection reports and stops. |
 | `select_track`                                                                                                                               | Music selector: one LLM call scores every library section 0–10 for the reel and picks the argmax (random below `min_score`).|
+| `selection stream` | One background selection producer feeding approved clips to a single export consumer; queued approvals survive a later search failure, and stopping the consumer cancels further work. |
 | `selection.json` | Selection-only output containing source path, final clip bounds, titles, reasons, scores, and first-pass text. |
 | `selection.md` | Human-readable selection-only report with timestamps, opening and ending text, and selection reasons. |
 | `shareability`                                                                                                                               | Reel scorecard axis: likelihood of share / save / comment (1–5).                                                    |
@@ -199,7 +217,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `stitched.mp4`                                                                                                                               | Trailer cache: output of `concat_with_black_gaps` before subtitles burned.                                          |
 | `SubLine`                                                                                                                                    | Dataclass for one rendered subtitle line: `(start, end, words)`.                                                    |
 | `tail_pad`                                                                                                                                   | `cfg.trailer.tail_pad`: post-roll buffer after the last spoken word of a trailer cut.                               |
-| `target_clips`                                                                                                                               | `cfg.analyze.target_clips`: hint to the LLM for how many reels to return.                                           |
+| `target_clips` | Optional explicit upper limit (`cfg.analyze.target_clips`); null uses the duration-based reel cap. |
 | `TechMetrics`                                                                                                                                | Dataclass: objective per-reel quality numbers (face_visibility, crop_stability, words_per_second, …).               |
 | `thematic_coherence`                                                                                                                         | Trailer scorecard axis: picks form one consistent thread (1–5).                                                     |
 | `Timeline`                                                                                                                                   | Type alias `list[TimelineSegment]`; consumed by the legacy `smart_crop_916` renderer.                               |
