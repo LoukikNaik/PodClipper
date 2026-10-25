@@ -4,7 +4,7 @@ Module under test: LLM post-pass that fixes Whisper mis-spellings and
 transliterates non-Latin scripts so captions are readable.
 
 Behaviors locked:
-  - `_extract_json_array`         — tolerant array parser with fence support.
+  - `_extract_corrections`        — strict correction-object parsing.
   - `cleanup_words`               — bounded retries and validated mapped corrections.
                                     Preserves word timings while updating text.
 """
@@ -17,27 +17,28 @@ from types import SimpleNamespace
 import pytest
 
 from podclipper.llm import LLMError
-from podclipper.transcribe_cleanup import CleanupError, _extract_json_array, cleanup_words
+from podclipper.transcribe_cleanup import CleanupError, _extract_corrections, cleanup_words
 from podclipper.types import Word
 
 
 # --------------------------------------------------------------------------- #
-# _extract_json_array
+# Structured correction responses
 # --------------------------------------------------------------------------- #
 
-def test_extract_json_array_parses_raw_array() -> None:
-    assert _extract_json_array('[{"source_indices": [0], "words": ["hi"]}]') == [
+
+def test_extract_corrections_parses_schema_object():
+    assert _extract_corrections('{"corrections": [{"source_indices": [0], "words": ["hi"]}]}') == [
         {"source_indices": [0], "words": ["hi"]},
     ]
 
 
-def test_extract_json_array_strips_json_code_fence() -> None:
-    assert _extract_json_array('```json\n[1, 2]\n```') == [1, 2]
-
-
-def test_extract_json_array_raises_cleanuperror_when_no_brackets() -> None:
-    with pytest.raises(CleanupError, match="no JSON array"):
-        _extract_json_array("no brackets here")
+@pytest.mark.parametrize('response', [
+    'not json', '[]', '{"corrections": [], "extra": true}',
+    '```json\n{"corrections": []}\n```', '{"corrections": null}',
+])
+def test_extract_corrections_rejects_responses_outside_schema(response):
+    with pytest.raises(CleanupError):
+        _extract_corrections(response)
 
 
 # --------------------------------------------------------------------------- #
@@ -46,6 +47,12 @@ def test_extract_json_array_raises_cleanuperror_when_no_brackets() -> None:
 
 def _provider_returning(mocker, raw_response: str):
     p = mocker.MagicMock()
+    try:
+        data = json.loads(raw_response)
+        if isinstance(data, list):
+            raw_response = json.dumps({'corrections': data})
+    except json.JSONDecodeError:
+        pass
     p.complete.return_value = raw_response
     return p
 
@@ -118,7 +125,7 @@ def test_cleanup_words_reports_error_when_responses_remain_unparseable(mocker) -
 
     with pytest.raises(CleanupError, match='Caption cleanup failed'):
         cleanup_words(words, provider, _cfg())
-    assert provider.complete.call_count == 2
+    assert provider.complete.call_count == 4  # Two parent attempts, then two on the first smaller chunk.
 
 
 def test_cleanup_words_reports_error_when_source_indices_are_missing(mocker) -> None:
@@ -127,6 +134,12 @@ def test_cleanup_words_reports_error_when_source_indices_are_missing(mocker) -> 
         {"source_indices": [0], "words": ["only_one"]},
     ]))
     words = _words("hello", "world")  # 2 words
+    def omit_last_word(**kwargs):
+        tokens = json.loads(kwargs['user_prompt'])['tokens']
+        return json.dumps({'corrections': [
+            {'source_indices': [t['i']], 'words': [t['w']]} for t in tokens[:-1]
+        ]})
+    provider.complete.side_effect = omit_last_word
 
     with pytest.raises(CleanupError):
         cleanup_words(words, provider, _cfg())
@@ -228,9 +241,9 @@ def test_cleanup_retries_only_failed_chunks_and_reuses_completed_chunks(mocker, 
     cfg.transcribe.cleanup.chunk_words = 1
     provider = mocker.MagicMock()
     provider.complete.side_effect = [
-        json.dumps([{'source_indices': [0], 'words': ['Hello']}]),
+        json.dumps({'corrections': [{'source_indices': [0], 'words': ['Hello']}]}),
         LLMError('unavailable'), LLMError('unavailable'),
-        json.dumps([{'source_indices': [0], 'words': ['World']}]),
+        json.dumps({'corrections': [{'source_indices': [0], 'words': ['World']}]}),
     ]
     words = _words('hello', 'world')
     with pytest.raises(CleanupError):
@@ -252,3 +265,44 @@ def test_cleanup_words_uses_shared_token_budget_when_no_cleanup_override(mocker)
     cleanup_words(_words("hello"), provider, cfg)
 
     assert provider.complete.call_args.kwargs["max_tokens"] == 32768
+
+
+def test_caption_corrections_request_an_enforced_schema(mocker):
+    provider = _provider_returning(mocker, json.dumps({'corrections': [
+        {'source_indices': [0], 'words': ['Hello']},
+    ]}))
+    result = cleanup_words(_words('hello'), provider, _cfg())
+    assert result[0].text == 'Hello'
+    format = provider.complete.call_args.kwargs['response_format']
+    assert format['type'] == 'json_schema'
+    assert format['json_schema']['strict'] is True
+    schema = format['json_schema']['schema']
+    assert schema['required'] == ['corrections']
+    assert schema['additionalProperties'] is False
+    item = schema['properties']['corrections']['items']
+    assert set(item['required']) == {'source_indices', 'words'}
+    assert item['additionalProperties'] is False
+
+
+def test_format_failure_splits_only_that_chunk_and_resumes_successful_halves(mocker, tmp_path):
+    provider = mocker.MagicMock()
+    provider.complete.side_effect = [
+        'broken json', 'broken json',
+        json.dumps({'corrections': [
+            {'source_indices': [0], 'words': ['One']}, {'source_indices': [1], 'words': ['two']},
+        ]}),
+        LLMError('temporary outage'), LLMError('temporary outage'),
+        json.dumps({'corrections': [
+            {'source_indices': [0], 'words': ['three']}, {'source_indices': [1], 'words': ['four']},
+        ]}),
+    ]
+    original = _words('one', 'two', 'three', 'four')
+    with pytest.raises(CleanupError):
+        cleanup_words(original, provider, _cfg(), cache_dir=tmp_path)
+    assert provider.complete.call_count == 5
+    result = cleanup_words(original, provider, _cfg(), cache_dir=tmp_path)
+    assert provider.complete.call_count == 6
+    assert [w.text for w in result] == ['One', 'two', 'three', 'four']
+    assert [(w.start, w.end) for w in result] == [(w.start, w.end) for w in original]
+    sizes = [len(json.loads(call.kwargs['user_prompt'])['tokens']) for call in provider.complete.call_args_list]
+    assert sizes == [4, 4, 2, 2, 2, 2]

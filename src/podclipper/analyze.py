@@ -13,10 +13,23 @@ from types import SimpleNamespace
 from .llm import LLMError, LLMProvider
 from .transcribe import transcript_to_timestamped_text
 from .types import Clip, Transcript, TranscriptSegment, Word
+from .reel_limits import reel_cap
+from .render_cache import fingerprint, write_json
 
 log = logging.getLogger("ave.analyze")
 
 from .prompts import load_prompt
+
+_DISCOVERY_FORMAT = {'type': 'json_schema', 'json_schema': {
+    'name': 'reel_candidates', 'strict': True, 'schema': {
+        'type': 'object', 'properties': {'clips': {'type': 'array', 'items': {
+            'type': 'object', 'properties': {
+                'start': {'type': 'number'}, 'end': {'type': 'number'},
+                'title': {'type': 'string'}, 'reason': {'type': 'string'}, 'hook_score': {'type': 'number'},
+            }, 'required': ['start', 'end', 'title', 'reason', 'hook_score'], 'additionalProperties': False,
+        }}}, 'required': ['clips'], 'additionalProperties': False,
+    },
+}}
 
 
 class AnalyzeError(Exception):
@@ -446,7 +459,7 @@ def _dump_debug(cache_dir, name: str, payload) -> None:
         return
     out_dir = Path(cache_dir) / "analyze"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / name).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    write_json(out_dir / name, payload)
 
 
 def _clip_to_dict(c: "Clip") -> dict:
@@ -456,58 +469,96 @@ def _clip_to_dict(c: "Clip") -> dict:
     }
 
 
-def analyze_for_reels(
+def _iter_candidate_sections(transcript, video_duration, provider, cfg, debug_cache_dir, excluded_ranges):
+    cap = reel_cap(video_duration, cfg)
+    window = getattr(cfg.analyze, 'discovery_window_seconds', 1200.0)
+    overlap = cfg.analyze.max_clip_seconds
+    if window <= overlap:
+        raise AnalyzeError('Discovery windows must be longer than the maximum reel duration')
+    intervals, start = [], 0.0
+    while start < video_duration:
+        end = min(video_duration, start + window)
+        intervals.append((start, end))
+        if end >= video_duration:
+            break
+        start = end - overlap
+    for index, (start, end) in enumerate(intervals):
+        segments = [s for s in transcript.segments if s.end > start and s.start < end]
+        excerpt = transcript_to_timestamped_text(Transcript(transcript.language, segments),
+                    resolution=cfg.analyze.transcript_timestamp_resolution)
+        if not excerpt.strip():
+            continue
+        budget = min(cap * 2, max(3, math.ceil(cap * 2 * (end - start) / video_duration)))
+        comedy = bool(getattr(cfg.crop, 'comedy_mode', False))
+        system = _load_prompt(cfg.analyze.min_clip_seconds, cfg.analyze.max_clip_seconds, budget, comedy=comedy)
+        if getattr(getattr(cfg.transcribe, 'scribe', None), 'enabled', False) and cfg.transcribe.cleanup.transliterate:
+            system += '\nWrite titles in English or Romanized Hinglish using Latin letters.'
+        prompt = (f'Search source interval {start:g}–{end:g} seconds. Timestamps are absolute source seconds. '
+                  'Keep every clip inside this interval. Find all strong distinct moments, up to the stated cap; '
+                  'the cap is not a quota.\n')
+        if excluded_ranges:
+            prompt += 'No selected clip may overlap these unreliable source ranges: ' + json.dumps(excluded_ranges) + '\n'
+        prompt += '\nTranscript:\n' + excerpt
+        cache = None
+        if debug_cache_dir is not None:
+            key = fingerprint([system, prompt, cfg.llm.endpoint, cfg.llm.model, cfg.llm.max_tokens])
+            cache = Path(debug_cache_dir) / 'analyze' / 'discovery' / f'{index:04d}-{key[:16]}.json'
+        raw = None
+        if cache is not None and cache.exists():
+            try:
+                raw = json.loads(cache.read_text())
+                if not isinstance(raw, list):
+                    raw = None
+            except (OSError, ValueError):
+                pass
+        if raw is None:
+            log.info('Searching transcript section %s/%s (%.0f–%.0fs)', index + 1, len(intervals), start, end)
+            try:
+                response = provider.complete(user_prompt=prompt, system_prompt=system, max_tokens=cfg.llm.max_tokens,
+                                             response_format=_DISCOVERY_FORMAT)
+            except LLMError as exc:
+                raise AnalyzeError(f'LLM discovery failed in section {index + 1}: {exc}') from exc
+            raw = _extract_json_array(response)
+            if not isinstance(raw, list):
+                raise AnalyzeError('Discovery did not return a clip array')
+            if cache is not None:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                write_json(cache, raw)
+        else:
+            log.info('Reusing transcript search section %s/%s', index + 1, len(intervals))
+        candidates = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            clip = _coerce_clip(item, video_duration, cfg.analyze.min_clip_seconds, cfg.analyze.max_clip_seconds)
+            if (clip is not None and clip.start >= start and clip.end <= end
+                    and not any(clip.start < b and clip.end > a for a, b in excluded_ranges or [])):
+                candidates.append(clip)
+        yield end, [_clip_to_dict(c) for c in sorted(candidates, key=lambda c: c.hook_score, reverse=True)]
+
+
+def _review_candidates(
     transcript: Transcript,
     video_duration: float,
     provider: LLMProvider,
     cfg: SimpleNamespace,
     debug_cache_dir: "Path | None" = None,
     excluded_ranges: list | None = None,
+    *, raw_clips, target=1,
 ) -> list[Clip]:
-    """Select, refine, validate, and title distinct podcast clips."""
+    """Refine and review candidates against their exact transcript evidence."""
     min_s = cfg.analyze.min_clip_seconds
     max_s = cfg.analyze.max_clip_seconds
-    target = cfg.analyze.target_clips
 
     comedy = bool(getattr(getattr(cfg, "crop", None), "comedy_mode", False))
-    system_prompt = _load_prompt(min_s, max_s, target, comedy=comedy)
     latin_titles = (getattr(getattr(getattr(cfg, "transcribe", None), "scribe", None), "enabled", False)
                     and cfg.transcribe.cleanup.transliterate)
-    if latin_titles:
-        system_prompt += "\nWrite titles in English or Romanized Hinglish using Latin letters, even when the transcript is in Hindi script."
     user_prompt = transcript_to_timestamped_text(
         transcript,
         resolution=cfg.analyze.transcript_timestamp_resolution,
     )
     if not user_prompt.strip():
         raise AnalyzeError("empty transcript — nothing to analyze")
-    if excluded_ranges:
-        user_prompt = ("The following source ranges have unresolved transcription issues. "
-                       "No selected clip may overlap any of them (numeric seconds): "
-                       + json.dumps(excluded_ranges) + "\n\nTranscript:\n" + user_prompt)
-
-    log.info(
-        f"Sending transcript to LLM ({provider.name}): "
-        f"{len(transcript.segments)} segments, "
-        f"~{len(user_prompt)} chars"
-    )
-    try:
-        response = provider.complete(
-            user_prompt=user_prompt,
-            system_prompt=system_prompt,
-            max_tokens=cfg.llm.max_tokens,
-        )
-    except LLMError as e:
-        raise AnalyzeError(f"LLM call failed: {e}") from e
-
-    log.debug(f"LLM raw response: {response[:500]}")
-
-    raw_clips = _extract_json_array(response)
-    _dump_debug(debug_cache_dir, "01_raw_picks.json", {
-        "llm_raw_response": response,
-        "parsed_clips": raw_clips,
-    })
-
     clips: list[Clip] = []
     snap_log: list[dict] = []
     for raw in raw_clips:
@@ -641,3 +692,113 @@ def analyze_for_reels(
     for i, c in enumerate(clips, 1):
         log.info(f"  #{i} [{c.start:.1f}-{c.end:.1f}] ({c.duration:.1f}s, score={c.hook_score:.2f}) {c.title}")
     return clips
+
+
+def iter_analyzed_clips(transcript, video_duration, provider, cfg, debug_cache_dir=None, excluded_ranges=None):
+    """Yield stable approved clips while later transcript sections remain unsearched."""
+    if not transcript_to_timestamped_text(transcript).strip():
+        raise AnalyzeError("empty transcript — nothing to analyze")
+    target = reel_cap(video_duration, cfg)
+    log.info("Discovering strong moments with %s: %s segments; cap %s reels",
+             provider.name, len(transcript.segments), target)
+    accepted, failures = [], []
+    context = fingerprint([
+        "incremental-review-v1", cfg.analyze, cfg.crop.comedy_mode,
+        cfg.transcribe.cleanup.transliterate, cfg.transcribe.scribe.enabled,
+        cfg.llm.endpoint, cfg.llm.model, cfg.llm.max_tokens,
+        [(s.start, s.end, s.text, [(w.start, w.end, w.text) for w in s.words]) for s in transcript.segments],
+        _CLIP_REVIEW_SYSTEM, load_prompt("reel_refiner.txt"), load_prompt("comedy_context.txt"),
+    ])
+
+    prior_complete = False
+    if debug_cache_dir is not None:
+        try:
+            prior = json.loads((Path(debug_cache_dir) / "analyze" / "04_final.json").read_text())
+            if prior.get("selection_context") == context:
+                restored = [_coerce_clip(c, video_duration, cfg.analyze.min_clip_seconds,
+                                        cfg.analyze.max_clip_seconds) for c in prior["final_clips"]]
+                if (len(restored) <= target and all(c is not None for c in restored)
+                        and not any(c.start < b and c.end > a for c in restored for a, b in excluded_ranges or [])
+                        and not any(c.start < d.end and c.end > d.start for i, c in enumerate(restored)
+                                    for d in restored[:i])):
+                    accepted = restored
+                    prior_complete = prior.get("discovery_complete") is True
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+
+    def save(complete=False):
+        _dump_debug(debug_cache_dir, "04_final.json", {
+            "final_clips": [_clip_to_dict(c) for c in accepted],
+            "discovery_complete": complete, "review_failures": failures, "selection_context": context,
+        })
+        log.info("Selection progress: %s clips approved; discovery %s", len(accepted),
+                 "complete" if complete else "continues")
+
+    def approve(raw):
+        if any(raw["start"] < c.end and raw["end"] > c.start for c in accepted):
+            return
+        cache = None
+        if debug_cache_dir is not None:
+            cache = Path(debug_cache_dir) / "analyze" / "reviews" / (fingerprint([context, raw]) + ".json")
+        reviewed = None
+        if cache is not None and cache.exists():
+            try:
+                stored = json.loads(cache.read_text())
+                if isinstance(stored, list):
+                    reviewed = [_coerce_clip(c, video_duration, cfg.analyze.min_clip_seconds,
+                                             cfg.analyze.max_clip_seconds) for c in stored]
+                    if any(c is None for c in reviewed):
+                        reviewed = None
+            except (OSError, ValueError, TypeError):
+                pass
+        if reviewed is None:
+            try:
+                reviewed = _review_candidates(transcript, video_duration, provider, cfg,
+                                               debug_cache_dir=cache.parent / cache.stem if cache is not None else None,
+                                               excluded_ranges=excluded_ranges, raw_clips=[raw])
+            except AnalyzeError as exc:
+                failures.append({"start": raw["start"], "end": raw["end"], "error": type(exc).__name__})
+                log.warning("Candidate review interrupted at %.1fs; keeping other approved clips", raw["start"])
+                return
+            if cache is not None:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                write_json(cache, [_clip_to_dict(c) for c in reviewed])
+        failures[:] = [f for f in failures if (f["start"], f["end"]) != (raw["start"], raw["end"])]
+        for clip in reviewed:
+            if (any(clip.start < c.end and clip.end > c.start for c in accepted)
+                    or any(clip.start < b and clip.end > a for a, b in excluded_ranges or [])):
+                continue
+            accepted.append(clip)
+            save()
+            yield clip
+
+    save(complete=prior_complete)
+    yield from accepted
+    if prior_complete:
+        return
+    deferred = []
+    for end, candidates in _iter_candidate_sections(transcript, video_duration, provider, cfg,
+                                                   debug_cache_dir, excluded_ranges):
+        # Keep room for later source intervals; rejected moments do not consume slots.
+        allowance = target if end >= video_duration else max(1, math.floor(target * end / video_duration))
+        for index, raw in enumerate(candidates):
+            if len(accepted) >= allowance:
+                deferred.extend(candidates[index:])
+                break
+            yield from approve(raw)
+        if len(accepted) >= target:
+            break
+    for raw in sorted(deferred, key=lambda c: c["hook_score"], reverse=True):
+        if len(accepted) >= target:
+            break
+        yield from approve(raw)
+    if failures and len(accepted) < target:
+        save()
+        raise AnalyzeError("Some candidate reviews failed; approved clips are saved. Retry the remaining work.")
+    save(complete=True)
+    log.info("Analyze complete: %s clips selected", len(accepted))
+
+
+def analyze_for_reels(transcript, video_duration, provider, cfg, debug_cache_dir=None, excluded_ranges=None):
+    """Collect incremental selections for selection-only callers."""
+    return list(iter_analyzed_clips(transcript, video_duration, provider, cfg, debug_cache_dir, excluded_ranges))

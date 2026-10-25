@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 import hashlib
+import json
 import secrets
 import subprocess
 import time
@@ -15,7 +16,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .store import Settings, database, initialize, month, usage
-from .results import reel_poster, reel_quality
+from .tasks import enqueue
+from .uploads import (CHUNK_BYTES, MAX_UPLOAD_BYTES, PARALLEL_REQUESTS,
+                      is_chunk_request, register_upload_routes, upload_info)
 
 
 def digest(value):
@@ -49,7 +52,7 @@ class Credential(BaseModel):
 
 class Submission(BaseModel):
     url: str = Field(max_length=2048)
-    clips: int = Field(default=5, ge=1, le=15, strict=True)
+    clips: int | None = Field(default=None, ge=1, le=30, strict=True)  # Legacy API ceiling; website selection is automatic.
     request_key: str = Field(min_length=16, max_length=80)
 
 
@@ -61,6 +64,8 @@ class SmallBodies:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope["method"] != "POST":
+            return await self.app(scope, receive, send)
+        if is_chunk_request(scope):
             return await self.app(scope, receive, send)
         messages, size = [], 0
         while True:
@@ -82,6 +87,8 @@ class SmallBodies:
 
 def create_app():
     settings = Settings.load()
+    from podclipper.config import load_default_config
+    max_reels = load_default_config().analyze.max_reel_cap
 
     @asynccontextmanager
     async def lifespan(app):
@@ -98,7 +105,8 @@ def create_app():
 
     @app.middleware("http")
     async def private_responses(request, call_next):
-        if request.headers.get("content-length", "0").isdigit() and int(request.headers.get("content-length", 0)) > 16384:
+        body_limit = CHUNK_BYTES if is_chunk_request(request.scope) else 16384
+        if request.headers.get("content-length", "0").isdigit() and int(request.headers.get("content-length", 0)) > body_limit:
             return Response(status_code=413)
         if request.method == "POST" and request.headers.get("origin") != settings.origin:
             return Response(status_code=403)
@@ -145,21 +153,45 @@ def create_app():
             raise HTTPException(403, "This dashboard is only available to the administrator")
         return user
 
-    def serialize(db, row):
+    def serialize(db, row, reels=None, summary=False):
         result = {k: row[k] for k in ("id", "url", "title", "clips", "state", "stage", "created_at",
                                      "updated_at", "finished_at", "error")}
+        result["source_type"] = row["source_type"]
+        result["upload"] = upload_info(db, row["id"]) if row["source_type"] == "upload" else None
         result["reels"] = []
-        directory = settings.data / "jobs" / row["id"]
-        for reel in db.execute("SELECT id,title,duration,path FROM reels WHERE job_id=? ORDER BY path", (row["id"],)):
-            path = (directory / reel["path"]).resolve()
-            result["reels"].append({"id": reel["id"], "title": reel["title"], "duration": reel["duration"],
-                                    "verdict": reel_quality(path) if path.is_relative_to(directory) else None})
+        result['selected_count'] = row['selected_count']
+        result['discovery_complete'] = bool(row['discovery_complete']) if row['discovery_complete'] is not None else row['state']=='completed'
+        reels = list(db.execute("SELECT id,title,duration,verdict FROM reels WHERE job_id=? ORDER BY path", (row['id'],))) if reels is None else reels
+        result['ready_count'] = len(reels)
+        result['reels'] = [{key:reel[key] for key in ('id','title','duration','verdict')} for reel in (reels[:1] if summary else reels)]
         return result
 
     def serialize_admin(db, row):
         result = serialize(db, row)
         owner = db.execute("SELECT name,email FROM users WHERE id=?", (row["user_id"],)).fetchone()
         result["owner"] = dict(owner)
+        return result
+
+    def serialize_many(db, rows, summary=False, include_owner=False):
+        if not rows:
+            return []
+        marks=','.join('?' for _ in rows)
+        grouped={row['id']:[] for row in rows}
+        for reel in db.execute(f'SELECT id,job_id,title,duration,verdict FROM reels WHERE job_id IN ({marks}) ORDER BY path',
+                               [row['id'] for row in rows]):
+            grouped[reel['job_id']].append(reel)
+        owners={}
+        if include_owner:
+            ids=list({row['user_id'] for row in rows})
+            placeholders=','.join('?' for _ in ids)
+            owners={row['id']:{'name':row['name'],'email':row['email']} for row in db.execute(
+                f'SELECT id,name,email FROM users WHERE id IN ({placeholders})',ids)}
+        result=[]
+        for row in rows:
+            item=serialize(db,row,reels=grouped[row['id']],summary=summary)
+            if include_owner:
+                item['owner']=owners[row['user_id']]
+            result.append(item)
         return result
 
     @app.get("/health")
@@ -177,6 +209,8 @@ def create_app():
     def config():
         with database(settings) as db:
             return {"google_client_id": settings.client_id, "monthly_limit": 5,
+                    "max_reels": max_reels, "max_upload_bytes": MAX_UPLOAD_BYTES,
+                    "upload_chunk_bytes": CHUNK_BYTES, "upload_parallel_requests": PARALLEL_REQUESTS,
                     "max_video_minutes": settings.max_seconds // 60,
                     "retention_days": settings.retention_days,
                     "worker_available": (settings.data / "worker-heartbeat").exists()
@@ -232,7 +266,7 @@ def create_app():
         with database(settings) as db:
             return {"name": user["name"], "email": user["email"], "csrf": user["csrf"],
                     "used": usage(db, user["id"]), "limit": 5, "month": month(), "timezone": "UTC",
-                    "is_admin": is_admin(user)}
+                    "is_admin": is_admin(user), "retention_days": None if is_admin(user) else settings.retention_days}
 
     @app.post("/auth/logout")
     def logout(request: Request, response: Response, user=Depends(auth)):
@@ -242,18 +276,18 @@ def create_app():
         return {"ok": True}
 
     @app.get("/jobs")
-    def jobs(user=Depends(auth)):
+    def jobs(summary: bool = False, user=Depends(auth)):
         with database(settings) as db:
-            return [serialize(db, row) for row in db.execute(
-                "SELECT * FROM jobs WHERE user_id=? ORDER BY created_at DESC LIMIT 100", (user["id"],)).fetchall()]
+            rows=db.execute("SELECT * FROM jobs WHERE user_id=? ORDER BY created_at DESC LIMIT 100", (user['id'],)).fetchall()
+            return serialize_many(db,rows,summary=summary)
 
     @app.get("/admin/jobs")
-    def admin_jobs(offset: int = Query(default=0, ge=0), user=Depends(admin)):
+    def admin_jobs(offset: int = Query(default=0, ge=0), summary: bool = False, user=Depends(admin)):
         with database(settings) as db:
             counts = {row["state"]: row["count"] for row in db.execute(
                 "SELECT state,COUNT(*) AS count FROM jobs GROUP BY state")}
             rows = db.execute("SELECT * FROM jobs ORDER BY created_at DESC,id LIMIT 50 OFFSET ?", (offset,)).fetchall()
-            return {"jobs": [serialize_admin(db, row) for row in rows], "total": sum(counts.values()),
+            return {"jobs": serialize_many(db,rows,summary=summary,include_owner=True), "total": sum(counts.values()),
                     "counts": counts, "offset": offset, "limit": 50}
 
     @app.get("/admin/jobs/{job_id}")
@@ -277,7 +311,7 @@ def create_app():
             previous = db.execute("SELECT * FROM jobs WHERE user_id=? AND request_key=?",
                                   (user["id"], payload.request_key)).fetchone()
             if previous:
-                if previous["video_id"] != video_id or previous["clips"] != payload.clips:
+                if previous["video_id"] != video_id or (payload.clips is not None and previous["clips"] != payload.clips):
                     raise HTTPException(409, "This request was already used for another submission")
                 return serialize(db, previous)
             existing = db.execute("SELECT * FROM jobs WHERE user_id=? AND video_id=? "
@@ -287,12 +321,13 @@ def create_app():
                 return serialize(db, existing)
             if usage(db, user["id"]) >= 5:
                 raise HTTPException(429, "You have used all 5 videos for this month. Your allowance resets on the 1st (UTC).")
-            if db.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')").fetchone()[0] >= 100:
+            if db.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('uploading','queued','running')").fetchone()[0] >= 100:
                 raise HTTPException(503, "The processing queue is full. Try again later.")
             job_id = str(uuid.uuid4())
             db.execute("INSERT INTO jobs (id,user_id,video_id,url,clips,quota_month,request_key,created_at,updated_at) "
-                       "VALUES (?,?,?,?,?,?,?,?,?)", (job_id, user["id"], video_id, url, payload.clips,
+                       "VALUES (?,?,?,?,?,?,?,?,?)", (job_id, user["id"], video_id, url, payload.clips or 0,
                                                       month(), payload.request_key, now, now))
+            enqueue(db,job_id,'prepare')
             return serialize(db, db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
 
     @app.get("/jobs/{job_id}")
@@ -308,6 +343,9 @@ def create_app():
             row = owned(db, job_id, user)
             if row["state"] not in ("failed", "partial") or row["attempts"] >= 3:
                 raise HTTPException(409, "This job cannot be retried. Contact support if it needs repair.")
+            if row['source_type'] == 'upload' and not row['reserved'] and not db.execute(
+                    'SELECT 1 FROM upload_chunks WHERE job_id=? LIMIT 1',(job_id,)).fetchone():
+                raise HTTPException(409,'This upload failed video validation. Choose another file in your workspace; your allowance was returned.')
             quota_month = row["quota_month"]
             if not row["reserved"]:
                 if usage(db, user["id"]) >= 5:
@@ -315,6 +353,7 @@ def create_app():
                 quota_month = month()
             db.execute("UPDATE jobs SET state='queued',stage='queued',error=NULL,reserved=1,quota_month=?,"
                        "finished_at=NULL,updated_at=? WHERE id=?", (quota_month, time.time(), job_id))
+            enqueue(db,job_id,'prepare',reset=True)
             return {"ok": True}
 
     @app.api_route("/jobs/{job_id}/reels/{reel_id}", methods=["GET", "HEAD"])
@@ -341,7 +380,9 @@ def create_app():
             raise HTTPException(404, "Reel is no longer available")
         if poster:
             try:
-                preview = reel_poster(path)
+                preview = path.with_suffix('.poster.jpg')
+                if preview.is_symlink() or not preview.is_file():
+                    raise HTTPException(503, 'Preview is being prepared. The reel can still be played.')
             except ValueError:
                 raise HTTPException(404, "Preview is unavailable") from None
             except (OSError, subprocess.SubprocessError):
@@ -350,4 +391,5 @@ def create_app():
         return FileResponse(path, media_type="video/mp4", filename=path.name if download else None,
                             headers={"Cache-Control": "private, no-store"})
 
+    register_upload_routes(app, settings, auth, owned, serialize, rate_limit)
     return app

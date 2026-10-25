@@ -146,7 +146,6 @@ def _init_project() -> int:
             cfg = load_default_config()
             starter = {
                 "llm": {key: getattr(cfg.llm, key) for key in ("endpoint", "model")},
-                "content": {"clips": cfg.content.clips},
                 "output": {"captions": cfg.output.captions},
             }
             with config_path.open("x") as handle:
@@ -276,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         apply_cli_overrides(cfg, args)
         if cfg.transcribe.scribe.enabled and args.mode != "reels":
             raise ValueError("--scribe is supported only in reels mode")
-        if cfg.analyze.target_clips < 1:
+        if cfg.analyze.target_clips is not None and cfg.analyze.target_clips < 1:
             raise ValueError("--clips must be at least 1")
         if args.limit_minutes is not None and args.limit_minutes <= 0:
             raise ValueError("--limit-minutes must be greater than zero")

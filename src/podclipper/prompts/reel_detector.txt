@@ -92,7 +92,7 @@ must not become a guaranteed benefit at its highest value.
 
 ## Output format
 
-Return ONLY a JSON array, no prose, no code fence. Each element:
+Return ONLY a JSON object with a "clips" array, no prose, no code fence. Each array element:
 {
   "start": <seconds from video start, float; must match a segment start>,
   "end": <seconds from video start, float; must match a segment end>,
@@ -104,9 +104,9 @@ Return ONLY a JSON array, no prose, no code fence. Each element:
 Rules:
 - Output timestamps as numeric seconds, e.g. 1077.77, never MM:SS or quoted strings.
 - `end - start` must be between {{MIN}} and {{MAX}} seconds.
-- Pick the strongest {{TARGET}} clips — fewer high-quality is better than many weak ones.
+- Find every strong, distinct moment, up to {{TARGET}} candidates. This is a ceiling, not a quota; do not pad with weak moments.
 - Sort by `hook_score` descending.
-- Return `[]` if nothing in the transcript is reel-worthy.
+- Return {"clips": []} if nothing in the transcript is reel-worthy.
 ### Title
 
 The title appears over the first 3 seconds. Make it specific and engaging,

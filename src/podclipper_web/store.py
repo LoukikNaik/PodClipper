@@ -82,13 +82,37 @@ def initialize(settings):
           created_at REAL NOT NULL, updated_at REAL NOT NULL, finished_at REAL,
           heartbeat REAL, error TEXT, UNIQUE(user_id, request_key));
         CREATE INDEX IF NOT EXISTS jobs_owner ON jobs(user_id, created_at);
+        CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(state,created_at);
         CREATE INDEX IF NOT EXISTS jobs_quota ON jobs(user_id, quota_month, reserved);
         CREATE TABLE IF NOT EXISTS reels (
           id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
           title TEXT NOT NULL, path TEXT NOT NULL, duration REAL NOT NULL,
           created_at REAL NOT NULL, UNIQUE(job_id, path));
+        CREATE TABLE IF NOT EXISTS tasks (
+          job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, kind TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'pending', owner TEXT, lease_until REAL,
+          attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(job_id,kind));
+        CREATE INDEX IF NOT EXISTS tasks_ready ON tasks(kind,state,lease_until);
         CREATE TABLE IF NOT EXISTS rate_limits (
           key TEXT PRIMARY KEY, window INTEGER NOT NULL, count INTEGER NOT NULL);
+        """)
+        db.execute("BEGIN IMMEDIATE")
+        if "source_type" not in {r["name"] for r in db.execute("PRAGMA table_info(jobs)")}:
+            db.execute("ALTER TABLE jobs ADD COLUMN source_type TEXT NOT NULL DEFAULT 'youtube'")
+        for table, additions in (('jobs', [('selected_count','INTEGER'),('discovery_complete','INTEGER'),('purged_at','REAL')]),
+                                 ('reels', [('verdict','TEXT')])):
+            columns={r['name'] for r in db.execute(f'PRAGMA table_info({table})')}
+            for name,kind in additions:
+                if name not in columns:
+                    db.execute(f'ALTER TABLE {table} ADD COLUMN {name} {kind}')
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS uploads (
+          job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+          filename TEXT NOT NULL, size INTEGER NOT NULL, updated_at REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS upload_chunks (
+          job_id TEXT NOT NULL REFERENCES uploads(job_id) ON DELETE CASCADE,
+          chunk_index INTEGER NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+          PRIMARY KEY(job_id, chunk_index));
         """)
     (settings.data / "web.sqlite3").chmod(0o600)
 

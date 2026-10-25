@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Studio from './Studio.jsx'
+import { navigate } from './navigation.js'
 
 const GH = 'https://github.com/LoukikNaik/PodClipper'
 
@@ -75,7 +76,7 @@ function Nav() {
         PodClipper
       </a>
       <div className="nav-right">
-        <a href="#/try" className="nav-install">Try PodClipper</a>
+        <a href="/try" className="nav-install">Try PodClipper</a>
         <a href="#how" className="nav-text-link">How it works</a>
         <a href={`${GH}#get-started`} className="nav-text-link">Docs</a>
         <a href="#install" className="nav-install">Install</a>
@@ -107,7 +108,7 @@ function Hero() {
           MP4s. Try the web workspace, or run it locally with your choice of LLM endpoint.
         </p>
         <div className="hero-ctas">
-          <a href="#/try" className="btn-primary">
+          <a href="/try" className="btn-primary">
             Try PodClipper <ArrowRight />
           </a>
           <a href="#install" className="btn-outline">
@@ -681,13 +682,33 @@ function Footer() {
 
 // ── App ───────────────────────────────────────────────────────────
 export default function App() {
-  const [route, setRoute] = useState(window.location.hash)
+  const [route, setRoute] = useState(() => /^#\/(try|jobs|admin)(\/|$)/.test(window.location.hash) ? window.location.hash.slice(1) : window.location.pathname)
   useEffect(() => {
-    const change = () => setRoute(window.location.hash)
+    const change = () => {
+      if (/^#\/(try|jobs|admin)(\/|$)/.test(window.location.hash)) {
+        window.history.replaceState(null, '', window.location.hash.slice(1) + window.location.search)
+      }
+      setRoute(window.location.pathname)
+    }
+    const click = event => {
+      const link = event.target.closest?.('a[href]')
+      if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.target || link.hasAttribute('download')) return
+      const url = new URL(link.href, window.location.href)
+      if (url.origin !== window.location.origin || url.hash || !/^\/(try|jobs|admin)(\/|$)/.test(url.pathname)) return
+      event.preventDefault()
+      navigate(url.pathname + url.search)
+    }
+    change()
+    window.addEventListener('popstate', change)
     window.addEventListener('hashchange', change)
-    return () => window.removeEventListener('hashchange', change)
+    document.addEventListener('click', click)
+    return () => {
+      window.removeEventListener('popstate', change)
+      window.removeEventListener('hashchange', change)
+      document.removeEventListener('click', click)
+    }
   }, [])
-  if (route.startsWith('#/try') || route.startsWith('#/jobs/') || route.startsWith('#/admin')) return <Studio />
+  if (/^\/(try|jobs|admin)(\/|$)/.test(route)) return <Studio route={route} />
   return (
     <>
       <Nav />

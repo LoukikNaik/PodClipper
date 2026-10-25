@@ -6,6 +6,7 @@ import logging
 import os
 import base64
 from types import SimpleNamespace
+from urllib.parse import urlparse
 
 from .base import LLMError
 
@@ -34,6 +35,7 @@ class LiteLLMProvider:
         max_tokens: int = 4096,
         *,
         images: list[bytes] | None = None,
+        response_format: dict | None = None,
     ) -> str:
         import litellm
 
@@ -61,9 +63,16 @@ class LiteLLMProvider:
             kwargs["num_retries"] = self.num_retries
         if self.api_key:
             kwargs["api_key"] = self.api_key
-        if self.routing.get("only") or self.routing.get("order"):
+        if response_format is not None:
+            kwargs["response_format"] = response_format
+        openrouter = bool(self.api_base) and urlparse(self.api_base).hostname == "openrouter.ai"
+        strict_schema = (response_format is not None and response_format.get("type") == "json_schema"
+                         and response_format.get("json_schema", {}).get("strict") is True)
+        if (self.routing and (openrouter or self.routing.get("only") or self.routing.get("order"))) or (openrouter and strict_schema):
             routing = {key: value for key, value in self.routing.items()
                        if key not in {"only", "order"} or value}
+            if openrouter and strict_schema:
+                routing["require_parameters"] = True
             kwargs["extra_body"] = {"provider": routing}
 
         for attempt in range(2):

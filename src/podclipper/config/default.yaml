@@ -15,7 +15,7 @@ transcribe:
   scribe:
     source_repair_max_windows: 64 # bounded section retries per full-source chunk; reel captions use caption_repair.max_windows
     tag_audio_events: null       # null: detect laughter/applause in comedy mode; bool overrides
-    max_unreliable_fraction: 0.05 # exclude small unresolved source gaps after repairs; exported clips stay strict
+    max_unreliable_fraction: 0.10 # exclude small unresolved source gaps after repairs; exported clips stay strict
     enabled: false
     chunk_seconds: 300.0
     overlap_seconds: 4.0
@@ -74,8 +74,8 @@ transcribe:
 llm:
   endpoint: https://api.openai.com/v1
   model: gpt-5-mini
-  max_tokens: 32768
-  retry_max_tokens: 32768        # raise above max_tokens to allow one larger retry after truncation
+  max_tokens: 131072
+  retry_max_tokens: 131072       # raise above max_tokens to allow one larger retry after truncation
   timeout_seconds: 900
   num_retries: 2
   routing:
@@ -86,7 +86,7 @@ llm:
 
 content:
   type: podcast
-  clips: 8
+  clips: null                   # automatic duration-based cap; optional explicit upper limit
   duration: [15, 90]
 
 output:
@@ -99,7 +99,11 @@ analyze:
   comedy_reaction_seconds: 2.0  # maximum non-speech tail after a stand-up punchline
   min_clip_seconds: 15
   max_clip_seconds: 90
-  target_clips: 8                # hint to the LLM; it may return fewer/more
+  target_clips: null             # optional explicit cap; null derives it from source duration
+  min_reel_cap: 3
+  max_reel_cap: 30
+  seconds_per_reel: 300.0
+  discovery_window_seconds: 1200.0
   source_limit_seconds: null     # null = whole video; N = only consider the
                                  # first N seconds for clip selection (skips
                                  # transcribing the rest). CLI: --limit-minutes

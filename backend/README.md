@@ -54,6 +54,13 @@ and host-only in production; localhost mode relaxes Secure only for development.
 
 ## Persistence and authorization
 
+New website submissions contain the YouTube URL and an idempotency key, with no
+reel-count choice. Once the download duration is known, the worker derives the
+cap: at least three, one per five source minutes, at most thirty. Selection scans
+overlapping transcript windows and reviews a larger candidate pool. The UI shows
+actual selected/finished totals. Existing saved selections are preserved on retry;
+older API clients may still supply an explicit ceiling using `clips`.
+
 ### Admin dashboard
 
 Set `WEB_ADMIN_GOOGLE_SUB` in the server's private `.env` to the administrator's
@@ -61,12 +68,15 @@ verified Google account identifier (`users.id` in SQLite), then restart the API.
 Leave it blank to disable admin access. This is a single account ID, not an email
 allowlist; only server configuration can grant the role.
 
-The owner sees **Admin dashboard** in the workspace header (`#/admin`). It lists
+The owner sees **Admin dashboard** in the workspace header (`/admin`). It lists
 all users' jobs, current stages and finished reels, with playback and downloads.
 It refreshes every five seconds and paginates in groups of 50. The admin view is
 read-only; retry controls remain in each user's own workspace. All `/admin/*`
 endpoints, including video GET/HEAD requests, enforce this role on the server.
 Ordinary `/jobs/*` routes continue to enforce account ownership for everyone.
+The configured administrator’s own results do not expire automatically, including
+existing jobs. Other accounts retain the configured `WEB_RETENTION_DAYS` policy.
+Abandoned uploads still expire, and successful jobs still clear source/cache files.
 
 - `web-data/web.sqlite3` contains users, hashed session tokens, one-time login
   challenges, monthly quota reservations, job status, and finished reel manifests.
@@ -80,18 +90,31 @@ Ordinary `/jobs/*` routes continue to enforce account ownership for everyone.
   UTC; queued/running/completed/partial jobs count. Failed jobs without outputs
   release their slot. Idempotency keys and duplicate-video lookup prevent network
   retries from charging twice. Retrying a failed job reacquires a slot when needed.
-- One worker holds an OS flock; pipeline children inherit the lock. Following a
-  restart the worker waits for any surviving child, then requeues interrupted jobs
-  and resumes through existing cache checkpoints.
+- One supervisor runs two preparation slots and one render slot. Preparation
+  validates/uploads or downloads the source and caches cloud transcription, so a
+  second podcast can prepare while another exports. Local Whisper remains in the
+  single render slot when cloud transcription is disabled.
+- SQLite tasks have expiring ownership leases. Per-job process locks and the
+  render-slot lock are inherited by child processes, preventing duplicate work
+  after a supervisor restart. Recovery resumes expired tasks through checkpoints;
+  startup never resets every running job to queued.
 - All finished, evaluated reels enter the manifest, including `skip` verdicts.
   Quality verdicts are advisory and shown to users beside playback and download.
-  Partial retries reuse saved
-  selection bounds and render missing clips, preserving completed results.
+  Selection reviews each discovery section as it completes, while one export
+  runs alongside the next search. The website counts only finished reels and
+  displays “reels ready for review” without a duration-based denominator.
+  Partial retries continue unfinished discovery and reuse approved selections,
+  skipping clips whose source bounds already have a completed export.
+- Caption corrections request strict structured output. OpenRouter routing
+  always requires parameter support for these requests, including when no
+  provider allowlist is configured. Invalid JSON/mappings receive bounded retries
+  and one subdivision into smaller chunks; successful chunks and subdivision
+  decisions persist, so another attempt resumes the failed portion.
 - Full-source Scribe chunks have a separate bounded repair budget
   (`transcribe.scribe.source_repair_max_windows`, default 64). The short reel
   caption budget remains eight windows. After retries, small unresolved source
   gaps are excluded from podcast/comedy clip selection with surrounding context;
-  successful repairs are retained. Unresolved speech above 5% of a source chunk
+  successful repairs are retained. Unresolved speech above 10% of a source chunk
   still stops processing (`transcribe.scribe.max_unreliable_fraction`). Exported
   reel captions must pass the strict coverage checks. Successful audio requests
   stay cached on retry.
@@ -119,3 +142,54 @@ beside `web-data/`. `/source` offers it publicly under AGPL-3.0; it must exclude
 credentials, sessions, user data, model weights, and private runtime configuration.
 
 Application data is independent of Instagram posting history in podcast-agent.
+
+
+## Video uploads
+
+The workspace accepts MP4, MOV, M4V, MKV, and WebM files strictly below
+1,000,000,000 bytes, with an audio track and the same three-hour video limit.
+Uploads and YouTube links share the five-video monthly allowance.
+
+The API reserves one allowance slot when an owned upload session starts. The
+browser transfers 32,000,000-byte chunks with four parallel requests; the API
+streams at most four chunks concurrently to private temporary files. Each chunk
+has a saved SHA-256 receipt, may arrive out of order, and can be retried without
+duplicating bytes. Select the same file after an interruption to resume. The
+browser remembers only an upload identifier and a small file fingerprint.
+
+Only the signed-in owner can send, resume, finalize, or cancel an upload. The
+existing Origin and CSRF checks still apply, and ordinary JSON bodies remain
+limited to 16 KiB. Each raw upload request is limited to 32 MB, so uploads work
+through the existing Cloudflare Tunnel without sending a 1 GB request.
+
+`POST /uploads` starts a session; `GET /uploads/{id}` reports received chunks;
+`POST /uploads/{id}/chunks/{index}` transfers one raw part;
+`POST /uploads/{id}/complete` registers background validation and returns HTTP 202;
+a preparation task assembles the file, verifies checksums, and runs ffprobe before
+allowing transcription or rendering; `POST /uploads/{id}/cancel` removes incomplete data and returns the
+allowance. The worker consumes the assembled source through its normal pipeline.
+Invalid media returns the allowance. Abandoned sessions expire after 24 hours of
+inactivity; cleanup runs in the worker supervisor. File deletion stays outside
+database write transactions.
+Successful jobs retain the existing source/cache cleanup and result retention.
+No storage provider, API key, or additional environment setting is required.
+
+
+## API responsiveness
+
+Upload streams remain bounded to four concurrent 32 MB chunks. Disk writes,
+hashing, durable flushes, and chunk database updates run in I/O threads rather
+than the API event loop. Completion requests do not assemble or probe files.
+If a worker finds a corrupt saved part, the job returns to uploading and the
+browser can resume the same session; invalid media releases the quota slot.
+
+Workers persist selected counts, discovery state, and reel verdicts in SQLite,
+and prepare posters before publishing new reel rows. A background startup pass
+fills metadata/posters for legacy results. Status endpoints do not open progress
+or scorecard files, and poster requests never launch FFmpeg.
+
+Job lists support `?summary=true`: batched reel/owner reads return a preview and
+actual `ready_count`, while job detail endpoints return the full reel list.
+The web app polls only the open job, avoids repeatedly requesting account data,
+skips polling in hidden tabs, and slows idle library polling. The API continues
+using one process so the global four-upload limit remains intact.

@@ -1,4 +1,4 @@
-"""Separate entry points for the web API and the single processing worker."""
+"""Separate entry points for the web API and the bounded task supervisor."""
 
 import argparse
 

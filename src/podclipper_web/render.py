@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 from .store import Settings
-from .results import finished_reel_path
+from .results import finished_reel_path, finished_reels
 
 
 def main():
@@ -33,56 +33,75 @@ def main():
     cfg.subtitles.ffmpeg_preset = "veryfast"
     cfg.evaluate.auto_skip = False
     setup_logging("INFO")
+    if len(sys.argv) > 2 and sys.argv[2] == 'transcribe':
+        if cfg.transcribe.scribe.enabled:
+            run_pipeline(directory / 'source.mp4', cfg, use_cache=True, transcribe_only=True)
+        return 0
     status_path = directory / "progress.json"
     try:
         prior = json.loads(status_path.read_text())
     except (OSError, ValueError):
         prior = {}
-    completed = [p for p in prior.get("completed", []) if Path(p).is_file()]
+    completed = [p for p in finished_reels(directory, prior)
+                 if Path(p).is_file() and Path(p).resolve().is_relative_to(directory)]
     status = {"stage": "transcribing", "completed": completed, "done": False}
     selection = directory / "selection.json"
-    if not selection.exists():
-        candidates = list((directory / ".cache").glob("*/analyze/04_final.json"))
-        if len(candidates) == 1:
-            selected = json.loads(candidates[0].read_text()).get("final_clips", [])
-            if selected:
-                write_json(selection, {"source": str(directory / "source.mp4"), "clips": selected})
-    pending = None
-    if selection.exists():
-        selected = json.loads(selection.read_text())
-        status["selected_count"] = len(selected["clips"])
-        bounds = []
-        for value in completed:
-            fields = {}
+    bounds = []
+    for value in completed:
+        fields = {}
+        try:
             for line in Path(value).with_suffix(".txt").read_text().splitlines():
                 if line.startswith(("source_start: ", "source_end: ")):
                     key, number = line.split(": ", 1)
                     fields[key] = float(number)
-            if len(fields) == 2:
-                bounds.append((fields["source_start"], fields["source_end"]))
-        remaining = [c for c in selected["clips"] if not any(
-            abs(c["start"] - a) < .05 and abs(c["end"] - b) < .05 for a, b in bounds)]
-        if not remaining:
-            status.update(done=True, stage="completed", produced=completed)
-            write_json(status_path, status)
-            return 0
-        pending = directory / "selection-pending.json"
-        write_json(pending, {**selected, "clips": remaining})
+        except (OSError, ValueError):
+            continue
+        if len(fields) == 2:
+            bounds.append((fields["source_start"], fields["source_end"]))
+    if not selection.exists():
+        candidates = list((directory / ".cache").glob("*/analyze/04_final.json"))
+        if len(candidates) == 1:
+            cached = json.loads(candidates[0].read_text())
+            selected = cached.get("final_clips", [])
+            if selected:
+                write_json(selection, {"source": str(directory / "source.mp4"), "clips": selected,
+                                       "discovery_complete": cached.get("discovery_complete", True)})
+    pending = None
+    if selection.exists():
+        selected = json.loads(selection.read_text())
+        status["selected_count"] = len(selected["clips"])
+        status["discovery_complete"] = selected.get("discovery_complete", True)
+        if status["discovery_complete"]:
+            remaining = [c for c in selected["clips"] if not any(
+                abs(c["start"] - a) < .05 and abs(c["end"] - b) < .05 for a, b in bounds)]
+            if not remaining:
+                status.update(done=True, stage="completed", produced=completed)
+                write_json(status_path, status)
+                return 0
+            pending = directory / "selection-pending.json"
+            write_json(pending, {**selected, "clips": remaining})
+            status["stage"] = "exporting"
     write_json(status_path, status)
 
     class Progress(logging.Handler):
         def emit(self, record):
             message = record.getMessage()
-            if message.startswith(("Full Scribe transcript:", "Cached first-pass transcript", "Reusing cached first-pass transcript")):
-                status["stage"] = "selecting"
-            elif record.name == "ave.pipeline" and message.startswith("Output directory:"):
+            if message.startswith(("Full Scribe transcript:", "Reusing full Scribe transcript:",
+                                   "Cached first-pass transcript", "Reusing cached first-pass transcript",
+                                   "Discovering strong moments with", "Searching transcript section",
+                                   "Reusing transcript search section")):
+                if status["stage"] != "exporting":
+                    status["stage"] = "selecting"
+            elif message.startswith("Selection progress:"):
+                candidates = list((directory / ".cache").glob("*/analyze/04_final.json"))
+                if len(candidates) == 1:
+                    state = json.loads(candidates[0].read_text())
+                    selected = state.get("final_clips", [])
+                    status.update(selected_count=len(selected), discovery_complete=state["discovery_complete"])
+                    write_json(selection, {"source": str(directory / "source.mp4"), "clips": selected,
+                                           "discovery_complete": state["discovery_complete"]})
+            elif record.name == "ave.pipeline" and message.startswith("Exporting approved clip:"):
                 status["stage"] = "exporting"
-                if not selection.exists():
-                    candidates = list((directory / ".cache").glob("*/analyze/04_final.json"))
-                    if len(candidates) == 1:
-                        selected = json.loads(candidates[0].read_text()).get("final_clips", [])
-                        status["selected_count"] = len(selected)
-                        write_json(selection, {"source": str(directory / "source.mp4"), "clips": selected})
             elif record.name == "ave.pipeline":
                 path = finished_reel_path(message, directory)
                 if path is not None and str(path) not in status["completed"]:
@@ -92,10 +111,10 @@ def main():
     handler = Progress()
     logging.getLogger("ave").addHandler(handler)
     try:
-        produced = run_pipeline(directory / "source.mp4", cfg, use_cache=True, selection_path=pending)
+        produced = run_pipeline(directory / "source.mp4", cfg, use_cache=True, selection_path=pending, completed_bounds=bounds)
         status.update(done=True, stage="completed", produced=[str(p.resolve()) for p in produced])
         write_json(status_path, status)
-        return 0 if produced else 1
+        return 0 if produced or completed else 1
     except Exception:
         logging.getLogger("ave.web").exception("Processing failed")
         status.update(done=True, stage="failed")

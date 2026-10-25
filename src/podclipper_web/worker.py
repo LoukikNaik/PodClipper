@@ -1,4 +1,4 @@
-"""One durable worker. Database reservations survive browser and API restarts."""
+"""Durable preparation and render tasks supervised with bounded concurrency."""
 
 import fcntl
 import hashlib
@@ -11,9 +11,12 @@ import subprocess
 import sys
 import time
 import threading
+import uuid
+
+from .tasks import claim, complete, enqueue, renew
 
 from .store import Settings, database, initialize
-from .results import finished_reels
+from .results import finished_reels, reel_quality, reel_poster
 
 log = logging.getLogger("podclipper.web.worker")
 
@@ -32,7 +35,39 @@ def update(settings, job_id, **values):
     (settings.data / "worker-heartbeat").touch()
 
 
+def sync_metadata(settings, job_id, directory=None, posters=False):
+    """Persist worker-produced summaries; HTTP status reads need no sidecars."""
+    directory = directory or settings.data / 'jobs' / job_id
+    try:
+        selection = json.loads((directory / 'selection.json').read_text())
+        clips = selection['clips']
+        if not isinstance(clips,list):
+            raise ValueError('Invalid selection')
+        with database(settings) as db:
+            db.execute('UPDATE jobs SET selected_count=?,discovery_complete=? WHERE id=?',
+                       (len(clips),int(selection.get('discovery_complete',True) is True),job_id))
+    except (OSError,ValueError,KeyError,TypeError):
+        pass
+    with database(settings) as db:
+        reels = db.execute('SELECT id,path,verdict FROM reels WHERE job_id=?',(job_id,)).fetchall()
+    for reel in reels:
+        path = (directory / reel['path']).resolve()
+        if not path.is_relative_to(directory.resolve()) or not path.is_file():
+            continue
+        if reel['verdict'] is None:
+            verdict = reel_quality(path)
+            if verdict:
+                with database(settings) as db:
+                    db.execute('UPDATE reels SET verdict=? WHERE id=?',(verdict,reel['id']))
+        if posters:
+            try:
+                reel_poster(path)
+            except (OSError,ValueError,subprocess.SubprocessError):
+                log.warning('Poster preparation failed for %s; a later worker pass can retry',reel['id'])
+
+
 def collect(settings, job_id, directory):
+    sync_metadata(settings,job_id,directory,posters=True)
     progress = directory / "progress.json"
     if not progress.exists():
         return
@@ -63,9 +98,14 @@ def collect(settings, job_id, directory):
         result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                                  "-of", "json", str(path)], capture_output=True, text=True, timeout=30, check=True)
         duration = float(json.loads(result.stdout)["format"]["duration"])
+        try:
+            reel_poster(path)
+        except (OSError,ValueError,subprocess.SubprocessError):
+            log.warning('Poster preparation failed for %s; a later worker pass can retry',key)
+
         with database(settings) as db:
-            db.execute("INSERT OR IGNORE INTO reels VALUES (?,?,?,?,?,?)",
-                       (key, job_id, title, relative, duration, time.time()))
+            db.execute("INSERT OR IGNORE INTO reels (id,job_id,title,path,duration,created_at,verdict) VALUES (?,?,?,?,?,?,?)",
+                       (key, job_id, title, relative, duration, time.time(),reel_quality(path)))
 
 
 def download(settings, job, directory):
@@ -102,28 +142,50 @@ def download(settings, job, directory):
     if source.stat().st_size > 3 * 1024**3:
         source.unlink()
         raise ValueError("This video's download exceeds the 3 GB server limit. Your allowance has been returned.")
-    save(ready, {"bytes": source.stat().st_size})
+    save(ready, {"bytes": source.stat().st_size, "duration": info["duration"]})
 
 
-def process(settings, job, lock_fd):
+def prepare_request(settings, job, directory):
+    if not job['clips']:
+        from podclipper.config import load_default_config
+        from podclipper.reel_limits import reel_cap
+        metadata = json.loads((directory / 'source-ready.json').read_text())
+        duration = metadata.get('duration')
+        if duration is None:
+            from podclipper.ingest import ingest
+            duration = ingest(directory / 'source.mp4').duration
+        job['clips'] = reel_cap(duration, load_default_config())
+        update(settings, job['id'], clips=job['clips'])
+    save(directory / 'request.json', {'clips': job['clips']})
+
+
+def process(settings, job, lock_fds, preparation=False):
     directory = settings.data / "jobs" / job["id"]
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    save(directory / "request.json", {"clips": job["clips"]})
     process = None
     try:
-        update(settings, job["id"], stage="downloading", error=None)
-        download(settings, job, directory)
-        update(settings, job["id"], stage="transcribing")
+        if preparation:
+            update(settings, job['id'], stage='validating' if job.get('source_type') == 'upload' else 'downloading', error=None)
+            if job.get('source_type') == 'upload':
+                from .uploads import finalize_upload
+                if not finalize_upload(settings, job['id']):
+                    return False
+            download(settings, job, directory)
+            prepare_request(settings, job, directory)
+        update(settings, job['id'], stage='transcribing')
         with (directory / "processing.log").open("a", buffering=1) as output:
-            # Child keeps the global flock alive if the worker crashes. A replacement
-            # worker waits for it, then resumes through the pipeline's checkpoints.
-            process = subprocess.Popen([sys.executable, "-u", "-m", "podclipper_web.render", str(directory)],
+            # Children retain this job's lock and, for exports, the render slot.
+            command = [sys.executable, '-u', '-m', 'podclipper_web.render', str(directory)]
+            if preparation:
+                command.append('transcribe')
+            process = subprocess.Popen(command,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
-                                       pass_fds=(lock_fd,))
+                                       pass_fds=lock_fds)
             started = time.monotonic()
             while process.poll() is None:
-                collect(settings, job["id"], directory)
-                update(settings, job["id"])
+                if not preparation:
+                    collect(settings, job['id'], directory)
+                update(settings, job['id'])
                 if time.monotonic() - started > 6 * 3600:
                     process.terminate()
                     try:
@@ -133,7 +195,11 @@ def process(settings, job, lock_fd):
                         process.wait()
                     raise ValueError("Processing reached its time limit. Completed reels are saved; retry the remaining work.")
                 time.sleep(3)
-        collect(settings, job["id"], directory)
+        if preparation:
+            if process.returncode != 0:
+                raise ValueError('Source transcription was interrupted. Retry to resume its saved chunks.')
+            return True
+        collect(settings, job['id'], directory)
         with database(settings) as db:
             count = db.execute("SELECT COUNT(*) FROM reels WHERE job_id=?", (job["id"],)).fetchone()[0]
         if not count:
@@ -160,13 +226,27 @@ def process(settings, job, lock_fd):
 
 
 def expire(settings):
+    from .uploads import expire_uploads
+    expire_uploads(settings)
     cutoff = time.time() - settings.retention_days * 86400
     with database(settings) as db:
-        rows = db.execute("SELECT id FROM jobs WHERE state IN ('completed','partial','failed') AND finished_at<?", (cutoff,)).fetchall()
-        for row in rows:
-            shutil.rmtree(settings.data / "jobs" / row["id"], ignore_errors=True)
-            db.execute("DELETE FROM reels WHERE job_id=?", (row["id"],))
-            db.execute("UPDATE jobs SET state='expired',stage='expired',updated_at=? WHERE id=?", (time.time(), row["id"]))
+        rows = db.execute("SELECT id FROM jobs WHERE user_id<>? AND "
+                          "((state IN ('completed','partial','failed') AND finished_at<?) "
+                          "OR (state='expired' AND purged_at IS NULL))", (settings.admin_user_id,cutoff)).fetchall()
+    for row in rows:
+        with database(settings) as db:
+            db.execute('BEGIN IMMEDIATE')
+            changed=db.execute("UPDATE jobs SET state='expired',stage='expired',updated_at=? WHERE id=? AND user_id<>? AND "
+                               "((state IN ('completed','partial','failed') AND finished_at<?) OR (state='expired' AND purged_at IS NULL))",
+                               (time.time(),row['id'],settings.admin_user_id,cutoff))
+            if not changed.rowcount:
+                continue
+            db.execute('DELETE FROM reels WHERE job_id=?',(row['id'],))
+        directory=settings.data/'jobs'/row['id']
+        shutil.rmtree(directory,ignore_errors=True)
+        if not directory.exists():
+            with database(settings) as db:
+                db.execute('UPDATE jobs SET purged_at=? WHERE id=?',(time.time(),row['id']))
 
 
 def main():
@@ -185,26 +265,43 @@ def main():
             except BlockingIOError:
                 log.info("Another worker or its pipeline child is still active; waiting")
                 time.sleep(10)
+        owner = uuid.uuid4().hex
+        stop = threading.Event()
         with database(settings) as db:
-            db.execute("UPDATE jobs SET state='queued',stage='queued' WHERE state='running'")
-        def heartbeat():
-            while True:
-                (settings.data / "worker-heartbeat").touch()
-                time.sleep(10)
-        threading.Thread(target=heartbeat, daemon=True).start()
-        while True:
-            (settings.data / "worker-heartbeat").touch()
-            expire(settings)
+            for row in db.execute("SELECT id FROM jobs WHERE state='queued'").fetchall():
+                enqueue(db,row['id'],'prepare')
+
+        def run_tasks(kind):
+            while not stop.is_set():
+                try:
+                    with claim(settings,kind,owner) as task:
+                        if task is None:
+                            stop.wait(2)
+                            continue
+                        prepared = process(settings,task,task['lock_fds'],preparation=kind=='prepare')
+                        complete(settings,task,next_kind='render' if kind=='prepare' and prepared else None)
+                except Exception:
+                    log.exception('Web task runner failed; its lease and checkpoints allow recovery')
+                    stop.wait(2)
+
+        threads = [threading.Thread(target=run_tasks,args=(kind,),name=f'podclipper-{kind}-{i}',daemon=True)
+                   for kind,count in (('prepare',2),('render',1)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        def backfill():
             with database(settings) as db:
-                db.execute("BEGIN IMMEDIATE")
-                row = db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY created_at LIMIT 1").fetchone()
-                if row:
-                    db.execute("UPDATE jobs SET state='running',stage='downloading',attempts=attempts+1,updated_at=? WHERE id=?",
-                               (time.time(), row["id"]))
-            if row:
-                process(settings, dict(row), lock.fileno())
-            else:
-                time.sleep(5)
+                ids=[row['id'] for row in db.execute("SELECT id FROM jobs WHERE state IN ('completed','partial')")]
+            for job_id in ids:
+                sync_metadata(settings,job_id,posters=True)
+        threading.Thread(target=backfill,name='podclipper-metadata',daemon=True).start()
+        try:
+            while True:
+                (settings.data / 'worker-heartbeat').touch()
+                renew(settings,owner)
+                expire(settings)
+                stop.wait(10)
+        finally:
+            stop.set()
 
 
 if __name__ == "__main__":
