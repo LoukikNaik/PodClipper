@@ -19,6 +19,7 @@ class LLMProvider(Protocol):
         max_tokens: int = 4096,
         *,
         images: list[bytes] | None = None,
+        response_format: dict | None = None,
     ) -> str:
         """Send a prompt and return the raw assistant text."""
         ...

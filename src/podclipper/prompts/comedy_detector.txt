@@ -22,8 +22,9 @@ this exact clip. Comedy exaggeration and a character's views must not become
 literal claims or endorsements. Never invent laughter or judge vocal delivery
 from text. Fewer complete jokes are better than a full quota of fragments.
 
-Return ONLY a JSON array, sorted by hook_score descending. Each item:
+Find every strong complete joke up to the cap; do not stop at an arbitrary small count or fill a quota.
+Return ONLY a JSON object with a "clips" array, sorted by hook_score descending. Each item:
 {"start": <numeric seconds>, "end": <numeric seconds>,
  "title": "short title", "reason": "identify the setup and punchline",
  "hook_score": <number 0.0 to 1.0>}
-Return [] if no complete standalone joke fits.
+Return {"clips": []} if no complete standalone joke fits.

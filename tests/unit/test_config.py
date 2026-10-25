@@ -45,8 +45,8 @@ def test_empty_config_inherits_defaults(tmp_path):
     assert ns_to_dict(load_config(path)) == ns_to_dict(load_default_config())
 
 
-def test_default_llm_budget_is_32k():
-    assert load_default_config().llm.max_tokens == 32768
+def test_default_llm_budget_is_128k():
+    assert load_default_config().llm.max_tokens == 131072
 
 
 def test_resolved_public_settings_match_internal_overrides(tmp_path):

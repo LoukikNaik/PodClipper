@@ -148,8 +148,16 @@ def _resolve(raw: dict, overrides: dict) -> SimpleNamespace:
     if (len(duration) != 2 or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in duration)
             or not 0 < duration[0] <= duration[1]):
         raise ValueError("content.duration must contain positive minimum and maximum seconds")
-    if not isinstance(content["clips"], int) or content["clips"] < 1:
-        raise ValueError("content.clips must be a positive integer")
+    for name, value in (("content.clips", content["clips"]), ("analyze.target_clips", merged["analyze"]["target_clips"])):
+        if value is not None and (type(value) is not int or value < 1):
+            raise ValueError(f"{name} must be null or a positive integer")
+    limits = merged["analyze"]
+    if (type(limits["min_reel_cap"]) is not int or type(limits["max_reel_cap"]) is not int
+            or not 1 <= limits["min_reel_cap"] <= limits["max_reel_cap"] <= 100):
+        raise ValueError("analyze reel caps must satisfy 1 <= min_reel_cap <= max_reel_cap <= 100")
+    for name in ("seconds_per_reel", "discovery_window_seconds"):
+        if type(limits[name]) not in (int, float) or not math.isfinite(limits[name]) or limits[name] <= 0:
+            raise ValueError(f"analyze.{name} must be finite and positive")
     for section, entries in aliases.items():
         for key, (target, field) in entries.items():
             value = merged[section][key]
@@ -166,6 +174,8 @@ def _resolve(raw: dict, overrides: dict) -> SimpleNamespace:
                 merged[target][field] = value
     if merged["subtitles"]["style"] not in ("classic", "pop", "off"):
         raise ValueError("subtitles.style must be classic, pop or off")
+    if merged['analyze']['discovery_window_seconds'] <= merged['analyze']['max_clip_seconds']:
+        raise ValueError('analyze.discovery_window_seconds must exceed the maximum reel duration')
     content["type"] = "comedy" if merged["crop"]["comedy_mode"] else "podcast"
     content["clips"] = merged["analyze"]["target_clips"]
     content["duration"] = [merged["analyze"]["min_clip_seconds"], merged["analyze"]["max_clip_seconds"]]

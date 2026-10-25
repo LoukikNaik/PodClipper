@@ -8,6 +8,7 @@ import logging
 import math
 import re
 import subprocess
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,8 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from .analyze import analyze_for_reels
+from .analyze import analyze_for_reels, iter_analyzed_clips
+from .selection_stream import prefetch_selection
 from .audio import extract_audio
 from .crop import smart_crop_916, smart_crop_916_stacked
 from .detect import detect_humans_per_frame, detect_humans_all_per_frame
@@ -150,8 +152,12 @@ def run_pipeline(
     use_cache: bool = True,
     select_only: bool = False,
     selection_path: Path | None = None,
+    completed_bounds: list[tuple[float, float]] | None = None,
+    transcribe_only: bool = False,
 ) -> list[Path]:
     """Return rendered reels, or selection reports when select_only is enabled."""
+    if transcribe_only and (select_only or selection_path is not None):
+        raise ValueError('Transcription preparation cannot select or export saved clips')
     input_path = Path(input_path)
     console = get_console()
 
@@ -217,17 +223,22 @@ def run_pipeline(
             transcript_cache.write_text(json.dumps(_transcript_to_json(transcript)))
             log.info(f"Cached first-pass transcript → {transcript_cache}")
 
+    if transcribe_only:
+        return [scribe.transcript_path if scribe else transcript_cache]
+
+    streaming = selection_path is None and not select_only
     if selection_path is None:
         selection_provider = build_provider(cfg.llm)
         exclusions = {"excluded_ranges": scribe.unreliable_ranges} if scribe and scribe.unreliable_ranges else {}
-        clips = analyze_for_reels(transcript, analyze_duration, selection_provider, cfg,
+        select = iter_analyzed_clips if streaming else analyze_for_reels
+        clips = select(transcript, analyze_duration, selection_provider, cfg,
                                   debug_cache_dir=cache, **exclusions)
 
     # No language pinning: the 2nd pass auto-detects per clip, so a bilingual
     # episode transcribes each clip in its own language (forcing the episode
     # majority language garbles the odd-language-out clips).
 
-    if not clips and not select_only:
+    if not streaming and not clips and not select_only:
         log.warning("LLM returned no clips — nothing to produce")
         return []
 
@@ -278,8 +289,11 @@ def run_pipeline(
             log.warning("music enabled but library unavailable — reels will be silent-bed")
 
     produced: list[Path] = []
+    clip_total = None if streaming else len(clips)
+    selected_count = 0
+    selection_context = prefetch_selection(clips) if streaming else nullcontext(iter(clips))
 
-    with Progress(
+    with selection_context as clip_stream, Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]{task.description}"),
         BarColumn(),
@@ -288,14 +302,19 @@ def run_pipeline(
         console=console,
         transient=False,
     ) as progress:
-        task_id = progress.add_task(f"Processing {len(clips)} clip(s)", total=len(clips))
+        task_id = progress.add_task("Finding and making reels" if streaming else f"Processing {clip_total} clip(s)", total=clip_total)
 
-        for i, clip in enumerate(clips, 1):
+        for i, clip in enumerate(clip_stream, 1):
+            selected_count = i
+            if any(abs(clip.start - a) < .05 and abs(clip.end - b) < .05 for a, b in completed_bounds or []):
+                log.info("Keeping previously exported clip: %s", clip.title)
+                continue
+            log.info("Exporting approved clip: %s", clip.title)
             slug = _slug(clip.title)
             stem = f"reel_{i:02d}_{slug}"
             clip_cache = clip_cache_dir(cache, meta.path, clip, cfg)
 
-            progress.update(task_id, description=f"[{i}/{len(clips)}] {clip.title[:40]}")
+            progress.update(task_id, description=f"[{i}] {clip.title[:40]}")
 
             try:
                 segment_path = clip_cache / "segment.mp4"
@@ -444,17 +463,17 @@ def run_pipeline(
                     skip_dir.mkdir(exist_ok=True)
                     final_path.rename(skip_dir / final_path.name)
                     sidecar_path.rename(skip_dir / sidecar_path.name)
-                    log.warning(f"[{i}/{len(clips)}] Auto-skipped (score {scorecard.final_score:.2f}): {clip.title}")
+                    log.warning(f"[{i}/{clip_total or i}] Auto-skipped (score {scorecard.final_score:.2f}): {clip.title}")
                 else:
                     produced.append(final_path)
-                    log.info(f"[{i}/{len(clips)}] Done ({scorecard.verdict}): {final_path}")
+                    log.info(f"[{i}/{clip_total or i}] Done ({scorecard.verdict}): {final_path}")
 
             except Exception as exc:  # noqa: BLE001
-                log.exception(f"[{i}/{len(clips)}] Failed: {clip.title}: {exc}")
+                log.exception(f"[{i}/{clip_total or i}] Failed: {clip.title}: {exc}")
 
             progress.advance(task_id)
 
-    log.info(f"Pipeline complete — {len(produced)}/{len(clips)} reels written to {output_dir}")
+    log.info(f"Pipeline complete — {len(produced)}/{selected_count} reels written to {output_dir}")
     for p in produced:
         log.info(f"  → {p}")
     return produced

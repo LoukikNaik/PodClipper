@@ -289,3 +289,44 @@ def test_provider_routing_forwarded_without_reasoning_override(mocker, tmp_path)
     }}
     assert "reasoning" not in params["extra_body"]
     assert "reasoning_effort" not in params
+
+
+def test_strict_schema_reaches_openrouter_without_a_provider_allowlist(mocker):
+    from podclipper.config import load_default_config
+    from podclipper.llm import build_provider
+    completion = mocker.patch('litellm.completion')
+    completion.return_value = _make_litellm_response(mocker, '{"corrections": []}')
+    cfg = load_default_config().llm
+    cfg.endpoint = 'https://openrouter.ai/api/v1'
+    schema = {'type': 'json_schema', 'json_schema': {
+        'name': 'caption_corrections', 'strict': True,
+        'schema': {'type': 'object', 'properties': {'corrections': {'type': 'array', 'items': {'type': 'string'}}},
+                   'required': ['corrections'], 'additionalProperties': False},
+    }}
+    build_provider(cfg).complete('Correct captions', response_format=schema)
+    params = completion.call_args.kwargs
+    assert params['response_format'] == schema
+    assert params['extra_body']['provider'] == {'allow_fallbacks': True, 'require_parameters': True}
+
+
+def test_default_openrouter_routing_flags_do_not_leak_to_other_endpoints(mocker):
+    from podclipper.config import load_default_config
+    from podclipper.llm import build_provider
+    completion = mocker.patch('litellm.completion')
+    completion.return_value = _make_litellm_response(mocker, 'ok')
+    build_provider(load_default_config().llm).complete('Hello')
+    assert 'extra_body' not in completion.call_args.kwargs
+
+
+def test_strict_openrouter_request_always_requires_parameter_support(mocker):
+    from podclipper.config import load_default_config
+    from podclipper.llm import build_provider
+    completion = mocker.patch('litellm.completion')
+    completion.return_value = _make_litellm_response(mocker, '{}')
+    cfg = load_default_config().llm
+    cfg.endpoint = 'https://openrouter.ai/api/v1'
+    cfg.routing.require_parameters = False
+    build_provider(cfg).complete('Hi', response_format={
+        'type': 'json_schema', 'json_schema': {'name': 'test', 'strict': True, 'schema': {'type': 'object'}},
+    })
+    assert completion.call_args.kwargs['extra_body']['provider']['require_parameters'] is True

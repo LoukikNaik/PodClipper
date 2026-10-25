@@ -62,6 +62,13 @@ class SourceRepairTests(unittest.TestCase):
             with self.assertRaises(CaptionCoverageError):
                 self.exercise_unresolved_source(Path(temporary), [(100, 150)])
 
+    def test_source_can_exclude_twenty_seconds_after_section_retries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            transcriber, _, _ = self.exercise_unresolved_source(Path(temporary), [(100, 120)])
+            self.assertTrue(transcriber.unreliable_ranges)
+            self.assertLessEqual(transcriber.unreliable_ranges[0][0], 100)
+            self.assertGreaterEqual(transcriber.unreliable_ranges[0][1], 120)
+
     def test_model_cannot_select_a_clip_overlapping_an_excluded_section(self):
         cfg = load_default_config()
         transcript = Transcript('en', [TranscriptSegment(0, 100, 'A complete conversation.',

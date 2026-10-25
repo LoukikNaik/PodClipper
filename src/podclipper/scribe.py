@@ -280,7 +280,7 @@ class ScribeTranscriber:
                                              audio_events=events, max_windows=self.options.source_repair_max_windows)
                     except CaptionCoverageError as exc:
                         remaining = exc.remaining_issues
-                        fraction = getattr(self.options, "max_unreliable_fraction", .05)
+                        fraction = getattr(self.options, "max_unreliable_fraction", .10)
                         if (exc.words is None or not remaining
                                 or sum(b - a for a, b in remaining) > chunk.duration * fraction):
                             raise
