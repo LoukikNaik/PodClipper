@@ -161,3 +161,38 @@ test('unlimited owner can submit beyond five videos without a monthly cap displa
   expect(screen.getByRole('button',{name:'Find reels'}).disabled).toBe(false)
   expect(screen.queryByText('Resets on the 1st · UTC')).toBeNull()
 })
+
+test('Google sign-in uses the page theme and updates without reinitializing login', async () => {
+  window.history.replaceState({}, '', '/try')
+  localStorage.setItem('podclipper-theme','dark')
+  const initialize=vi.fn(), renderButton=vi.fn()
+  vi.stubGlobal('google',{accounts:{id:{initialize,renderButton}}})
+  const original=fetch.getMockImplementation()
+  fetch.mockImplementation(async (url,options) => {
+    const path=new URL(url).pathname
+    if(path==='/me')return {ok:false,status:401,json:async()=>({})}
+    if(path==='/auth/challenge')return response({nonce:'test-nonce'})
+    return original(url,options)
+  })
+  render(<App />)
+  await waitFor(()=>expect(renderButton).toHaveBeenCalled())
+  expect(renderButton.mock.lastCall[1].theme).toBe('filled_black')
+  fireEvent.click(screen.getByRole('button',{name:'Switch to light mode'}))
+  await waitFor(()=>expect(renderButton.mock.lastCall[1].theme).toBe('outline'))
+  expect(initialize).toHaveBeenCalledTimes(1)
+  localStorage.clear()
+})
+
+test('workspace groups theme and menu controls separately from account links', async () => {
+  window.history.replaceState({}, '', '/try')
+  render(<App />)
+  await screen.findByRole('heading',{name:'My podcasts'})
+  const toggle=screen.getByRole('button',{name:/Switch to (light|dark) mode/})
+  const menu=screen.getByRole('button',{name:'Open account menu'})
+  expect(toggle.parentElement).toBe(menu.parentElement)
+  expect(menu.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(menu)
+  expect(menu.getAttribute('aria-expanded')).toBe('true')
+  fireEvent.keyDown(menu,{key:'Escape'})
+  expect(menu.getAttribute('aria-expanded')).toBe('false')
+})

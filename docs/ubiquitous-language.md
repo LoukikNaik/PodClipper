@@ -42,6 +42,7 @@ Source of truth for every named thing in this repo. Look it up before naming or 
 | `structured output` | Provider-enforced JSON schema requested through LiteLLM; caption correction requests require compatible OpenRouter endpoints. |
 | `Studio` | Google-gated website workspace for submitting YouTube links and returning to private WebJob results, including advisory skip verdicts. |
 | `StudioIcon` | Small inline SVG icon set shared by the web workspace and upload controls. |
+| `ThemeToggle` | Shared light/dark theme control; defaults to light until an explicit local choice is saved across pages. |
 | `task lease` | Expiring worker ownership of one web task, renewed while active and combined with per-job process locks for crash-safe recovery. |
 | `transcribe_only` | Internal pipeline preparation mode that caches source transcription and returns before selection, detection, or reel rendering. |
 | `unreliable_ranges` | Bounded unresolved source-transcript spans, padded with context, barred from podcast and comedy clip selection after section retries; successful repairs are kept and exported clip caption checks stay strict. |

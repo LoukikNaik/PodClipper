@@ -49,3 +49,15 @@ The workflow also supports a manual dispatch.
 Keep Homebrew/pip requirements and the shared `podclipper init` flow aligned
 with the root README and the published package. The page links to the PyPI
 package, Homebrew tap, configuration docs, releases, issues, and AGPL license.
+
+### Themes and mobile checks
+
+The landing page and workspace share a light/dark toggle. Light mode is
+the default; explicit choices are saved locally and applied before React renders.
+Private browsing or unavailable local storage does not block the toggle.
+
+The mobile landing header uses an expandable navigation menu. Forms use 16px
+input text to avoid focus zoom on iOS, primary controls have 44px minimum touch
+targets, and both themes support reduced motion. `npm test` covers theme choice,
+workspace routing, and resumable upload behavior. Visual checks should include
+320px, 390px, 768px, and desktop widths, plus logged-out sign-in and reel details.

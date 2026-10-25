@@ -4,6 +4,16 @@ html { scroll-behavior: smooth; }
 
 /* ── Tokens ─────────────────────────────────────────────────── */
 :root {
+  color-scheme: light;
+  --action: #2563EB;
+  --action-hi: #1D4ED8;
+  --field: #fbfdff;
+  --success-bg: #e8f5ee;
+  --success-text: #216343;
+  --warning-bg: #fff6e7;
+  --warning-text: #7b4b08;
+  --warning-border: #edcc9b;
+  --neutral-bg: #edf1f6;
   --bg:        #F4F8FF;
   --bg-alt:    #EBF2FF;
   --surface:   #FFFFFF;
@@ -97,7 +107,7 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--blue);
+  background: var(--action);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
 }
 .h2 {
@@ -123,7 +133,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  background: var(--blue);
+  background: var(--action);
   color: #fff;
   font-family: var(--fb);
   font-weight: 600;
@@ -136,7 +146,7 @@ body {
   box-shadow: var(--sh-blue);
 }
 .btn-primary:hover {
-  background: var(--blue-hi);
+  background: var(--action-hi);
   transform: translateY(-2px);
   box-shadow: 0 12px 36px rgba(37,99,235,0.3);
 }
@@ -286,7 +296,7 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--blue);
+  background: var(--action);
   animation: pulse 2s ease-in-out infinite;
 }
 @keyframes pulse {
@@ -1100,7 +1110,7 @@ a:focus-visible, button:focus-visible, pre:focus-visible {
 
 /* ── CTA Banner ───────────────────────────────────────────────── */
 .cta-section {
-  background: var(--blue);
+  background: var(--action);
   padding: 6rem 1.5rem;
   text-align: center;
 }
@@ -1131,7 +1141,7 @@ a:focus-visible, button:focus-visible, pre:focus-visible {
   align-items: center;
   gap: 0.5rem;
   background: #fff;
-  color: var(--blue);
+  color: var(--action);
   font-family: var(--fb);
   font-weight: 700;
   font-size: 0.9rem;
@@ -1215,4 +1225,64 @@ a:focus-visible, button:focus-visible, pre:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1728;
+  --bg-alt: #131f34;
+  --surface: #18253c;
+  --field: #111d30;
+  --border: #2d405e;
+  --border-2: #405b83;
+  --blue: #98bdff;
+  --blue-hi: #bed5ff;
+  --blue-soft: #203858;
+  --blue-dim: rgba(112, 160, 255, .1);
+  --blue-mid: rgba(112, 160, 255, .18);
+  --text: #edf3ff;
+  --text-2: #d0ddf2;
+  --muted: #a6b6ce;
+  --subtle: #536782;
+  --success-bg: #173e34;
+  --success-text: #9be3bd;
+  --warning-bg: #3a2d18;
+  --warning-text: #f4d096;
+  --warning-border: #796039;
+  --neutral-bg: #25334a;
+  --sh-sm: 0 1px 3px #0003;
+  --sh-md: 0 4px 16px #0004;
+  --sh-lg: 0 16px 48px #0005;
+  --sh-xl: 0 32px 80px #0006;
+}
+[data-theme="dark"] .nav { background: #0e1728e8; }
+[data-theme="dark"] .hero { background: linear-gradient(180deg, #152843, var(--bg) 65%, #142139); }
+[data-theme="dark"] .hero-grid { background-image: radial-gradient(circle, #638bd433 1px, transparent 1px); }
+[data-theme="dark"] .btn-cta:hover { background: #e2ecff; }
+.nav-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; margin-right: 24px; }
+.theme-toggle, .nav-menu-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px; padding: 10px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text-2); cursor: pointer;
+}
+.theme-toggle:hover, .nav-menu-toggle:hover { background: var(--blue-soft); }
+.nav-menu-toggle { display: none; }
+:focus-visible { outline: 3px solid var(--blue); outline-offset: 4px; }
+.nav a { min-height: 44px; display: inline-flex; align-items: center; }
+.command-block button { min-height: 44px; min-width: 44px; }
+@media (max-width: 680px) {
+  .nav { height: auto; min-height: 64px; flex-wrap: wrap; padding: 10px 16px; gap: 8px; }
+  .nav-controls { margin: 0 0 0 auto; }
+  .nav-menu-toggle { display: inline-flex; }
+  .nav-right { display: none; width: 100%; gap: 4px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .nav-right.is-open { display: grid; grid-template-columns: 1fr 1fr; }
+  .nav-right a { padding: 8px 12px; font-size: 14px; }
+  .nav-right .nav-text-link { display: inline-flex; }
+  .nav-right .nav-gh { border: 0; box-shadow: none; border-radius: 8px; background: transparent; }
+  .hero { padding-top: 3rem; }
+  .hero-ctas { width: 100%; }
+  .hero-ctas a { min-height: 48px; justify-content: center; }
+  .footer { padding: 24px 16px; gap: 16px; }
+  .footer-gh { overflow-wrap: anywhere; min-height: 44px; }
 }

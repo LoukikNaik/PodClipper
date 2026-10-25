@@ -1,3 +1,4 @@
+import ThemeToggle from './ThemeToggle.jsx'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './Studio.css'
 import StudioIcon from './StudioIcon.jsx'
@@ -50,6 +51,7 @@ function GoogleLogin({ config, onLogin }) {
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     let active = true
+    let themeObserver
     setError('')
     Promise.all([loadGoogle(), request('/auth/challenge')]).then(([, challenge]) => {
       if (!active || !button.current) return
@@ -65,10 +67,19 @@ function GoogleLogin({ config, onLogin }) {
           finally { if (active) setBusy(false) }
         },
       })
-      button.current.replaceChildren()
-      window.google.accounts.id.renderButton(button.current, { theme: 'outline', size: 'large', text: 'continue_with', shape: 'pill', width: 280 })
+      const paint = () => {
+        if (!active || !button.current) return
+        button.current.replaceChildren()
+        window.google.accounts.id.renderButton(button.current, {
+          theme: document.documentElement.dataset.theme === 'dark' ? 'filled_black' : 'outline',
+          size: 'large', text: 'continue_with', shape: 'pill', width: 280,
+        })
+      }
+      paint()
+      themeObserver = new MutationObserver(paint)
+      themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
     }).catch(e => { if (active) setError(e.message) })
-    return () => { active = false }
+    return () => { active = false; themeObserver?.disconnect() }
   }, [config.google_client_id, onLogin, attempt])
   return <section className="studio-login">
     <div className="studio-tape" aria-hidden><span /><span /><span /><span /><span /></div>
@@ -191,6 +202,9 @@ export default function Studio({ route }) {
   const [url, setUrl] = useState('')
   const [sending, setSending] = useState(false)
   const [mode, setMode] = useState('youtube')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuButton = useRef(null)
+  useEffect(() => { setMenuOpen(false) }, [route])
   const [uploading, setUploading] = useState(false)
   const key = useRef(null)
   const [detail, setDetail] = useState(null)
@@ -251,7 +265,15 @@ export default function Studio({ route }) {
     catch (e) { setError(e.message) }
   }
   return <div className="studio">
-    <header className="studio-header"><a href="/" className="studio-brand"><span className="studio-brand-mark"><StudioIcon name="scissors" size={21} /></span>PodClipper</a><div>{user?.is_admin && <a href={adminRoute ? '/try' : '/admin'}>{adminRoute ? 'My workspace' : 'Admin dashboard'}</a>}<a href="/privacy/">Privacy</a>{user && <><span>{user.name || user.email}</span><button onClick={logout}>Sign out</button></>}</div></header>
+    <header className="studio-header" onKeyDown={event => { if (event.key === 'Escape') { setMenuOpen(false); menuButton.current?.focus() } }}>
+      <a href="/" className="studio-brand"><span className="studio-brand-mark"><StudioIcon name="scissors" size={21} /></span>PodClipper</a>
+      <div className="studio-header-controls"><ThemeToggle /><button ref={menuButton} className="studio-menu-toggle" type="button" aria-label={menuOpen ? 'Close account menu' : 'Open account menu'} aria-controls="studio-account-links" aria-expanded={menuOpen} onClick={() => setMenuOpen(open => !open)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d={menuOpen ? 'M6 6l12 12M6 18 18 6' : 'M4 6h16M4 12h16M4 18h16'} /></svg></button></div>
+      <nav id="studio-account-links" aria-label="Account" className={`studio-header-links${menuOpen ? ' is-open' : ''}`} onClick={() => setMenuOpen(false)}>
+        {user?.is_admin && <a href={adminRoute ? '/try' : '/admin'}>{adminRoute ? 'My workspace' : 'Admin dashboard'}</a>}
+        <a href="/privacy/">Privacy</a>
+        {user && <><span>{user.name || user.email}</span><button onClick={logout}>Sign out</button></>}
+      </nav>
+    </header>
     <main className="studio-main">
       {loading ? <p className="studio-loading" role="status">Opening your workspace…</p> : <>
         {error && <div className="studio-error" role="alert">{error}{!config && <button onClick={() => window.location.reload()}>Reconnect</button>}</div>}
